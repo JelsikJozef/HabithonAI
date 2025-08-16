@@ -44,16 +44,17 @@ flowchart TD
   A[Input text] --> B{Detectors}
   B -->|regex| C[RegexDetector]
   B -->|presidio| D[PresidioDetector]
-  C & D --> E[Merge overlapping entities]
-  E --> F[Pseudonymize\n(replace spans with tokens)]
-  F --> G[Token Vault\n(File or Postgres)\nSave token ↔ value]
+  C --> E[Merge overlapping entities]
+  D --> E
+  E --> F[Pseudonymize<br/>(replace spans with tokens)]
+  F --> G[Token Vault<br/>(File or Postgres)<br/>Save token ↔ value]
   F --> H[Anonymized text with tokens]
   H --> I[LLM/API]
   I --> J[Response with tokens]
-  J --> K[De-anonymize\n(replace tokens via vault)]
+  J --> K[De-anonymize<br/>(replace tokens via vault)]
   K --> L[Restored text]
-  F --> M[Crypto\n(mask/hash/tokenize)]
-  M --> N[Key Manager\nactive_kid + tenant-scoped keys]
+  F --> M[Crypto<br/>(mask/hash/tokenize)]
+  M --> N[Key Manager<br/>active_kid + tenant-scoped keys]
 ```
 
 ## CLI

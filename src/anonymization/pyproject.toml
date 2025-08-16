@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anonymization"
+version = "0.1.0"
+description = "PII detection, pseudonymization, and de-anonymization toolkit"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  {name = "HabithonAI"}
+]
+keywords = ["pii", "privacy", "anonymization", "pseudonymization", "presidio", "fastapi"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Security :: Cryptography",
+  "Topic :: Text Processing :: Linguistic",
+]
+dependencies = []
+
+[project.optional-dependencies]
+api = [
+  "fastapi>=0.110,<1.0",
+  "pydantic>=2.5,<3.0",
+  "uvicorn[standard]>=0.23,<1.0",
+]
+presidio = [
+  "presidio-analyzer>=2.2",
+  "spacy>=3.5",
+]
+postgres = [
+  "psycopg>=3.1",
+]
+
+[project.scripts]
+anonymization-cli = "anonymization.presentation.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["anonymization*"]
+exclude = ["tests*", "packages*"]
+
+[tool.setuptools.package-data]
+"anonymization" = ["py.typed"]
+

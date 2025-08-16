@@ -41,20 +41,20 @@ Python 3.10+ is required.
 
 ```mermaid
 flowchart TD
-  A[Input text] --> B{Detectors}
-  B -->|regex| C[RegexDetector]
-  B -->|presidio| D[PresidioDetector]
-  C --> E[Merge overlapping entities]
+  A["Input text"] --> B{"Detectors"}
+  B -->|regex| C["RegexDetector"]
+  B -->|presidio| D["PresidioDetector"]
+  C --> E["Merge overlapping entities"]
   D --> E
-  E --> F[Pseudonymize<br/>(replace spans with tokens)]
-  F --> G[Token Vault<br/>(File or Postgres)<br/>Save token ↔ value]
-  F --> H[Anonymized text with tokens]
-  H --> I[LLM/API]
-  I --> J[Response with tokens]
-  J --> K[De-anonymize<br/>(replace tokens via vault)]
-  K --> L[Restored text]
-  F --> M[Crypto<br/>(mask/hash/tokenize)]
-  M --> N[Key Manager<br/>active_kid + tenant-scoped keys]
+  E --> F["Pseudonymize<br/>replace spans with tokens"]
+  F --> G["Token Vault<br/>File or Postgres<br/>Save token <-> value"]
+  F --> H["Anonymized text with tokens"]
+  H --> I["LLM / API"]
+  I --> J["Response with tokens"]
+  J --> K["De-anonymize<br/>replace tokens via vault"]
+  K --> L["Restored text"]
+  F --> M["Crypto<br/>mask / hash / tokenize"]
+  M --> N["Key Manager<br/>active_kid + tenant-scoped keys"]
 ```
 
 ## CLI

@@ -4,7 +4,7 @@ import unittest
 from typing import Any
 
 # Ensure src/ is importable
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../', 'src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
 
 from anonymization.adapters.token_vault.postgres_store import PostgresTokenVault
 
@@ -90,4 +90,3 @@ class TestPostgresStore(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

@@ -66,14 +66,16 @@ class LlmEnricher(LlmEnrichmentPort):
 
     def _prompt_summarize(self, text: str) -> str:
         return (
-            "You are a concise assistant. Summarize the following text in 1-3 sentences. "
-            "Do not include metadata or disclaimers. Output only the summary.\n\n"
+            "Si stručný asistent. Zhrň nasledujúci text do 1–3 viet v slovenskom jazyku. "
+            "Nevkladaj úvodné ani záverečné poznámky. VÝSTUP: iba samotné zhrnutie.\n\n"
+            "Dôležité: Ak text obsahuje špeciálne PII tokeny vo formáte {{PII:...}}, zachovaj ich presne tak, ako sú (bez zmien).\n\n"
             "Text:\n" + text
         )
 
     def _prompt_keywords(self, text: str, top_k: int) -> str:
         return (
-            "Extract the top {k} concise keywords or short key-phrases from the text. "
-            "Return a simple comma-separated list, no numbering, no extra text.\n\n"
+            "Extrahuj top {k} stručných kľúčových slov alebo krátkych fráz zo vstupu v slovenskom jazyku. "
+            "Vráť jednoduchý zoznam oddelený čiarkami, bez číslovania a bez dodatočného textu.\n\n"
+            "Dôležité: Ak text obsahuje špeciálne PII tokeny vo formáte {{PII:...}}, zachovaj ich presne tak, ako sú (bez zmien).\n\n"
             "Text:\n"
         ).format(k=top_k) + text

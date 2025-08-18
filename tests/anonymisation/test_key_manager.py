@@ -5,7 +5,7 @@ import base64
 import unittest
 
 # Ensure src/ is importable
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../', 'src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
 
 from anonymization.adapters.crypto import key_manager
 

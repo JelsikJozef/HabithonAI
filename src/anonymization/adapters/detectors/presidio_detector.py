@@ -1,8 +1,11 @@
 from typing import List, Optional, Dict
 import importlib
+import logging
 from ...domain.entities import PiiEntity
 from ...domain.errors import DetectionError
 from ...domain.ports import DetectorPort
+
+logger = logging.getLogger(__name__)
 
 
 class PresidioDetector(DetectorPort):
@@ -39,9 +42,11 @@ class PresidioDetector(DetectorPort):
                 self._analyzer = AnalyzerEngine(nlp_engine=nlp_engine)
             else:
                 self._analyzer = AnalyzerEngine()
+            logger.info("PresidioDetector initialized (languages=%s)", list((languages or {}).keys()))
         except Exception as e:  # Broad to capture ImportError and model issues
             self._init_error = str(e)
             self._analyzer = None
+            logger.warning("PresidioDetector unavailable: %s", self._init_error)
 
     def detect(self, text: str, language: Optional[str] = None) -> List[PiiEntity]:
         if not text:

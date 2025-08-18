@@ -29,7 +29,10 @@ def build_default() -> Tuple[List[DetectorPort], TokenVaultPort]:
     vault_dir = os.getenv("ANON_VAULT_DIR", ".anonymization_vault")
     vault = FileTokenVault(base_dir=vault_dir)
 
-    enabled = {d.strip().lower() for d in os.getenv("ANON_DETECTORS", "regex").split(",")}
+    # Default now includes presidio; users can override via env
+    enabled_env = os.getenv("ANON_DETECTORS")
+    enabled = {d.strip().lower() for d in (enabled_env.split(",") if enabled_env else ["regex", "presidio"])}
+
     detectors: List[DetectorPort] = []
 
     if "regex" in enabled:

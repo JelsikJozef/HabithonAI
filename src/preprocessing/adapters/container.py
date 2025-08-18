@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import os
+import logging
+
+try:
+    from dotenv import load_dotenv, find_dotenv  # type: ignore
+except Exception:  # pragma: no cover
+    def load_dotenv(*args, **kwargs):  # type: ignore
+        return False
+    def find_dotenv(*args, **kwargs):  # type: ignore
+        return ""
 
 # Parser registry and parsers
 from .parsers import ParserRegistry, TxtParser, PdfParser, DocxParser, MsgParser, ImageParser
 # Adapters (ports)
 from .serializer import JsonlSerializer
+from .serializer.per_file_jsonl import PerFileJsonlSerializer
 from .dedup import InMemoryDedup
 from .quality import QualityChecker
 from .enrichment import MetadataEnricher, LlmEnricher
+from .enrichment.llm_openai_enricher import OpenAiLlmEnricher
 from .ocr import PdfOcr
 # App services
 from ..app import (
@@ -20,6 +33,10 @@ from ..app import (
     SerializeService,
     PreprocessPipeline,
 )
+from ..app.llm_anonymize import LlmAnonymisationService
+from ..anonymization_integration import AnonymizationBridge
+
+logger = logging.getLogger(__name__)
 
 
 def build_default_parser_registry() -> ParserRegistry:
@@ -63,8 +80,21 @@ class Container:
         dedup = DedupService(dedup_store)
         quality_adapter = QualityChecker()
         quality = QualityService(quality_adapter)
-        # Serializer
-        sink = JsonlSerializer(output_jsonl)
+        # Serializer selection (file vs directory for 1→1 mapping)
+        try:
+            if output_jsonl.exists() and output_jsonl.is_dir():
+                sink = PerFileJsonlSerializer(output_jsonl)
+                logger.info("Serializer: per-file JSONL in directory %s", output_jsonl)
+            else:
+                if output_jsonl.suffix.lower() in {".jsonl", ".json"}:
+                    sink = JsonlSerializer(output_jsonl)
+                    logger.info("Serializer: single JSONL file %s", output_jsonl)
+                else:
+                    sink = PerFileJsonlSerializer(output_jsonl)
+                    logger.info("Serializer: per-file JSONL in directory %s", output_jsonl)
+        except Exception as e:
+            logger.warning("Serializer selection failed: %s; falling back to single-file JSONL", e)
+            sink = JsonlSerializer(output_jsonl)
         serialize = SerializeService(sink)
         # Optional OCR
         ocr_service = None
@@ -72,15 +102,72 @@ class Container:
             ocr_port = PdfOcr("tesseract")
             from ..app.ocr import OcrService  # local import to avoid cycles in typing
             ocr_service = OcrService(ocr_port)
-        # Optional LLM
+            logger.info("OCR enabled (tesseract)")
+        # Anonymization bridge between normalize and LLM
+        anonymize_bridge = None
+        try:
+            from anonymization.adapters.container import build_default as _build_anon
+            from anonymization.app.detect import detect_all as _detect_all
+            from anonymization.app.pseudonymize import pseudonymize as _pseudonymize
+            detectors, vault = _build_anon()
+
+            def _detect(text: str, language: str | None = None):
+                return _detect_all(text, detectors, language=language)
+
+            def _ctx_id_for(text: str) -> str:
+                return "doc:" + hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+
+            class _PseudoWrapper:
+                def run(self, *, text: str, language: str | None = None):
+                    ctx = _ctx_id_for(text)
+                    return _pseudonymize(text, detectors, vault, ctx, language=language)
+
+            anonymize_bridge = AnonymizationBridge(_detect, _PseudoWrapper(), policy={"include_text": False})
+            logger.info("Anonymization bridge enabled (regex/presidio per env)")
+        except Exception as e:
+            logger.warning("Anonymization bridge unavailable: %s", e)
+            anonymize_bridge = None
+        # LLM
+        # Auto-enable when OPENAI_API_KEY is present
+        dotenv_path = find_dotenv()
+        if dotenv_path:
+            load_dotenv(dotenv_path)
+        else:
+            load_dotenv()
+        env_has_key = bool(os.getenv("OPENAI_API_KEY"))
+        should_llm = enable_llm or env_has_key
         llm_service = None
-        if enable_llm:
-            # Minimal dummy client unless user provides a real one; returns empty text
-            class _DummyClient:
-                def complete(self, *, prompt: str, model: str, max_tokens: int = 512):  # noqa: D401
-                    return ""
-            llm_port = LlmEnricher(_DummyClient(), model="dummy")
-            from ..app.llm_enrich import LlmEnrichmentService as _LlmSvc
-            llm_service = _LlmSvc(llm_port)
+        if should_llm:
+            try:
+                from .enrichment.openai_client import OpenAiClient  # lazy import
+                # Instantiate detectors and vault once for anonymization service
+                from anonymization.adapters.container import build_default as _build_anon
+                detectors, vault = _build_anon()
+                anonymizer = LlmAnonymisationService(detectors, vault)
+                # Real OpenAI enricher that does a single-shot call
+                llm_client = OpenAiClient()
+                model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+                llm_port = OpenAiLlmEnricher(llm_client, model=model, max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")))
+                from ..app.llm_enrich import LlmEnrichmentService as _LlmSvc
+                llm_service = _LlmSvc(llm_port, anonymizer=anonymizer)
+                logger.info("LLM enabled (OpenAI model=%s)", model)
+            except Exception as e:
+                # Fallback to OpenAiLlmEnricher with no-op client so heuristics kick in
+                logger.warning("LLM wiring failed (%s); using local heuristics fallback", e)
+                class _NoopClient:
+                    def generate_summary_and_tags(self, *, text: str, model: str | None = None, max_tokens: int = 512):
+                        return "", []
+                llm_port = OpenAiLlmEnricher(_NoopClient())
+                from ..app.llm_enrich import LlmEnrichmentService as _LlmSvc
+                # still provide anonymizer
+                try:
+                    from anonymization.adapters.container import build_default as _build_anon2
+                    detectors2, vault2 = _build_anon2()
+                    anonymizer2 = LlmAnonymisationService(detectors2, vault2)
+                except Exception:
+                    anonymizer2 = None
+                llm_service = _LlmSvc(llm_port, anonymizer=anonymizer2)
+        else:
+            logger.info("LLM disabled (no --llm and no OPENAI_API_KEY)")
         # Compose pipeline
-        return PreprocessPipeline(parse, normalize, meta, dedup, quality, serialize, ocr=ocr_service, llm=llm_service)
+        return PreprocessPipeline(parse, normalize, meta, dedup, quality, serialize, ocr=ocr_service, llm=llm_service, anonymize=anonymize_bridge)

@@ -4,7 +4,7 @@ import unittest
 from typing import Any
 
 # Ensure src/ is importable
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../', 'src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
 
 from anonymization.adapters.token_vault.postgres_store import PostgresTokenVault
 
@@ -94,7 +94,7 @@ import sys
 import unittest
 
 # Ensure src/ is importable
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../', 'src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
 
 from anonymization.adapters.crypto.crypto import Crypto
 

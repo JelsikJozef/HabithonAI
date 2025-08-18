@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 from typing import Sequence
+import logging
+import sys
 
 from ..adapters import Container
 from ..adapters.ingestion.file_system import FileSystemIngestion
@@ -23,25 +25,60 @@ DEFAULT_GLOBS = (
 )
 
 
+def _setup_logging(out_path: Path) -> None:
+    # Determine log file path
+    if out_path.exists() and out_path.is_dir():
+        log_file = out_path / "run.log"
+        out_path.mkdir(parents=True, exist_ok=True)
+    else:
+        # If file or non-existent, place run.log next to it
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = out_path.parent / "run.log"
+    # Root logger: stream to stdout + file handler
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    # Clear existing handlers to avoid duplication
+    root.handlers.clear()
+    fmt = logging.Formatter("%(levelname)s %(name)s: %(message)s")
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setLevel(logging.INFO)
+    sh.setFormatter(fmt)
+    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(fmt)
+    root.addHandler(sh)
+    root.addHandler(fh)
+    logging.getLogger(__name__).info("Logging to %s", log_file)
+
+
 def _cmd_preprocess(args: argparse.Namespace) -> int:
     root = Path(args.input_dir).resolve()
     out_path = Path(args.out).resolve()
+    _setup_logging(out_path)
     globs = tuple(args.globs) if args.globs else DEFAULT_GLOBS
 
-    pipe = Container.default_pipeline(out_path, enable_ocr=bool(args.ocr), enable_llm=bool(args.llm))
+    # Always request LLM; container will auto-disable if no key
+    pipe = Container.default_pipeline(out_path, enable_ocr=bool(args.ocr), enable_llm=True)
 
     ingestor = FileSystemIngestion()
     ingest = IngestionService(ingestor)
     docs = ingest.ingest_batch(root, globs)
 
-    stats = pipe.process_many(docs)
-    print(json.dumps({"ok": True, "stats": stats, "out": str(out_path)}, ensure_ascii=False))
-    pipe._serialize.close()  # ensure close
+    stats_list = []
+    for idx, doc in enumerate(docs, 1):
+        print(f"Processing file {idx}: {getattr(doc, 'path', getattr(doc, 'file_path', 'UNKNOWN'))}")
+        # Process each document individually and collect stats
+        stat = pipe.process_one(doc)
+        stats_list.append(stat)
+    print(json.dumps({"ok": True, "stats": stats_list, "out": str(out_path)}, ensure_ascii=False))
+    pipe._serialize.close()
     return 0
 
 
 def _cmd_parse_file(args: argparse.Namespace) -> int:
     p = Path(args.path).resolve()
+    out_dir = p.parent
+    _setup_logging(out_dir)
     if not p.exists() or not p.is_file():
         print(json.dumps({"ok": False, "error": "Not a file: %s" % p}, ensure_ascii=False))
         return 1
@@ -74,9 +111,8 @@ def build_cli() -> argparse.ArgumentParser:
 
     p1 = sub.add_parser("preprocess", help="Run batch preprocessing on an input directory")
     p1.add_argument("input_dir", help="Input directory to scan")
-    p1.add_argument("--out", required=True, help="Output JSONL file path")
+    p1.add_argument("--out", required=True, help="Output JSONL file path or directory (dir => per-file .jsonl)")
     p1.add_argument("--ocr", action="store_true", help="Enable OCR for PDFs/images")
-    p1.add_argument("--llm", action="store_true", help="Enable LLM enrichment (dummy client by default)")
     p1.add_argument("--globs", action="append", help="Glob pattern(s) to include; can be repeated")
     p1.set_defaults(func=_cmd_preprocess)
 

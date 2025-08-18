@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling>=1.18.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "habithon-preprocessing"
+version = "0.1.0"
+description = "Document preprocessing pipeline: ingestion, parsing, OCR, normalization, enrichment, dedup, quality, serialization."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "HabithonAI" }
+]
+keywords = ["preprocessing", "ingestion", "ocr", "parsing", "nlp", "document" ]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "License :: OSI Approved :: MIT License",
+  "Intended Audience :: Developers",
+  "Topic :: Text Processing :: General",
+]
+# Core package has no hard runtime deps; features are optional.
+dependencies = []
+
+[project.optional-dependencies]
+parsers = [
+  "pdfminer.six>=20221105",
+  "python-docx>=0.8.11",
+  "extract_msg>=0.48.5",
+]
+ocr = [
+  "pdf2image>=1.17.0",
+  "pillow>=10.0.0",
+  "pytesseract>=0.3.10",
+]
+encoding = [
+  "charset-normalizer>=3.0.0",
+  "chardet>=5.0.0",
+]
+all = [
+  "pdfminer.six>=20221105",
+  "python-docx>=0.8.11",
+  "extract_msg>=0.48.5",
+  "pdf2image>=1.17.0",
+  "pillow>=10.0.0",
+  "pytesseract>=0.3.10",
+  "charset-normalizer>=3.0.0",
+  "chardet>=5.0.0",
+]
+
+[project.scripts]
+preprocessing = "preprocessing.presentation.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["preprocessing"]
+
+[tool.hatch.version]
+path = "preprocessing/__init__.py"
+

@@ -19,6 +19,9 @@ pip install './src/preprocessing[ocr]'
 # With charset detection helpers
 pip install './src/preprocessing[encoding]'
 
+# With language detection (fastText lid.176)
+pip install './src/preprocessing[lang]'
+
 # Everything
 pip install './src/preprocessing[all]'
 ```
@@ -57,6 +60,7 @@ preprocessing parse-file /path/to/file.pdf
 Notes:
 - OCR requires `tesseract`, `poppler` and Python packages from the `ocr` extra.
 - Parsers for PDF/DOCX/MSG require the `parsers` extra.
+- For language detection, install the `lang` extra or `all`. The first run will download the fastText model unless you provide a local path.
 - OPENAI_API_KEY must be set in your environment (or .env) for the CLI to run.
 
 ## Python API
@@ -91,10 +95,20 @@ pipe._serialize.close()
 - Parsers: TXT, PDF (pdfminer), DOCX (python-docx), MSG (extract_msg), images (with inline OCR best-effort)
 - OCR: Tesseract via `pdf2image` + `pytesseract`
 - Normalization: whitespace collapse, NFKC, simple header/footer stripping
-- Enrichment: language/token/length heuristics; LLM summaries/keywords (mandatory)
+- Enrichment: hash/token/length stats; language detection via fastText (lid.176) for 176 languages
 - Dedup: in-memory store
 - Quality: simple thresholds + metrics
 - Serialization: JSON Lines output
+
+## Language detection
+
+- Engine: fastText lid.176 model (176 languages). The detector predicts the ISO 639‑1 code, e.g. `en`, `sk`, `de`.
+- Confidence: predictions below a configurable threshold are ignored and `language` is set to `null`.
+- Fallbacks: when language can’t be reliably detected (`None`), the anonymization engine uses its default Presidio model; LLM enrichment continues unchanged.
+- Configuration (via .env or environment):
+  - LANGUAGE_MODEL_PATH: path to `lid.176.ftz`. If not provided, the model is cached under `~/.cache/habithon/fasttext/` on first use.
+  - LANGUAGE_MIN_CONFIDENCE: float in [0,1], default `0.5`.
+  - PREPROCESSING_FASTTEXT_MODEL: alternative env var to point to the model file.
 
 ## Workflow
 
@@ -104,7 +118,7 @@ High-level pipeline for one document:
 2) Parse: ParserRegistry selects a parser by extension (Txt/Pdf/Docx/Msg/Image)
 3) OCR (optional): OcrService runs PdfOcr when text is too short for pdf/png/jpg
 4) Normalize: NormalizeService collapses whitespace, applies NFKC, strips headers
-5) Metadata: MetadataEnricher adds language/hash/token counts and basic stats
+5) Metadata: MetadataEnricher adds language (fastText), hash, token counts, and basic stats
 6) Deduplicate: DedupService checks content hash (InMemoryDedup by default)
 7) Quality: QualityService evaluates length thresholds and metrics
 8) LLM: LlmEnrichmentService adds summary and keywords (run halts on LLM failure)
@@ -146,6 +160,7 @@ Record schema (JSONL):
 - For PDFs that fail to rasterize, try `pdftoppm -v` to confirm Poppler is available.
 - On Windows, install Tesseract from the official installer and configure environment variables accordingly.
 - If you see "OPENAI_API_KEY is required but not set", define it in your shell or put it in a .env file.
+- If language detection doesn’t run or downloads fail: ensure the `lang` extra is installed, set `LANGUAGE_MODEL_PATH` to a local `lid.176.ftz`, or allow outgoing network to fetch the model once.
 
 ## License
 

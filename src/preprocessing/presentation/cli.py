@@ -57,19 +57,31 @@ def _cmd_preprocess(args: argparse.Namespace) -> int:
     _setup_logging(out_path)
     globs = tuple(args.globs) if args.globs else DEFAULT_GLOBS
 
-    # Always request LLM; container will auto-disable if no key
-    pipe = Container.default_pipeline(out_path, enable_ocr=bool(args.ocr), enable_llm=True)
+    # LLM is mandatory; Container will enforce OPENAI_API_KEY at startup
+    try:
+        pipe = Container.default_pipeline(out_path, enable_ocr=bool(args.ocr))
+    except Exception as e:
+        print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+        return 2
 
     ingestor = FileSystemIngestion()
     ingest = IngestionService(ingestor)
     docs = ingest.ingest_batch(root, globs)
 
     stats_list = []
-    for idx, doc in enumerate(docs, 1):
-        print(f"Processing file {idx}: {getattr(doc, 'path', getattr(doc, 'file_path', 'UNKNOWN'))}")
-        # Process each document individually and collect stats
-        stat = pipe.process_one(doc)
-        stats_list.append(stat)
+    try:
+        for idx, doc in enumerate(docs, 1):
+            print("Processing file %d: %s" % (idx, getattr(doc, 'path', getattr(doc, 'file_path', 'UNKNOWN'))))
+            stat = pipe.process_one(doc)
+            stats_list.append(stat)
+    except Exception as e:
+        try:
+            pipe._serialize.close()
+        except Exception:
+            pass
+        print(json.dumps({"ok": False, "error": "Processing aborted: %s" % str(e)}, ensure_ascii=False))
+        return 3
+
     print(json.dumps({"ok": True, "stats": stats_list, "out": str(out_path)}, ensure_ascii=False))
     pipe._serialize.close()
     return 0

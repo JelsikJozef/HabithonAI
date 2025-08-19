@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 # Ensure src is importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
@@ -19,11 +20,15 @@ from preprocessing.app.serialize import SerializeService  # type: ignore
 
 
 class _FakeOpenAiClient:
-    """Fake OpenAI client responding with Slovak JSON and preserving tokens."""
+    """Fake OpenAI client responding with Slovak JSON and preserving tokens.
 
-    def __init__(self, summary=None, tags=None):
+    Accepts api_key in __init__ for compatibility with container wiring.
+    """
+
+    def __init__(self, summary=None, tags=None, api_key: Optional[str] = None):  # type: ignore[no-redef]
         self.summary = summary or "Stručné zhrnutie v slovenčine."
         self.tags = tags or ["kľúč", "značka"]
+        self.api_key = api_key
 
     def generate_summary_and_tags(self, *, text, model=None, max_tokens=512):
         # If the text contains a token, echo it in outputs to test de-anonymization
@@ -104,7 +109,9 @@ class TestLlmEnrichmentUnit(unittest.TestCase):
 
 class TestCliIntegration(unittest.TestCase):
     def setUp(self):
-        # Stub the OpenAI client module used by Container so --llm works without network
+        # Ensure an API key is present so container wiring proceeds
+        os.environ.setdefault('OPENAI_API_KEY', 'test')
+        # Stub the OpenAI client module used by Container so LLM works without network
         mod = types.ModuleType('preprocessing.adapters.enrichment.openai_client')
         setattr(mod, 'OpenAiClient', _FakeOpenAiClient)  # Container imports this name
         sys.modules['preprocessing.adapters.enrichment.openai_client'] = mod
@@ -120,8 +127,8 @@ class TestCliIntegration(unittest.TestCase):
             root = Path(tmpd)
             _ = (root / 'note.txt').write_text('Kontakt: profidecon@profidecon.com', encoding='utf-8')
             out = root / 'out.jsonl'
-            # Run CLI: preprocessing preprocess ROOT --out out.jsonl --llm
-            argv = ['preprocess', str(root), '--out', str(out), '--llm']
+            # Run CLI: preprocessing preprocess ROOT --out out.jsonl (LLM mandatory)
+            argv = ['preprocess', str(root), '--out', str(out)]
             rc = cli_main(argv)
             self.assertEqual(rc, 0)
             # Verify JSONL contains metadata.summary and metadata.tags

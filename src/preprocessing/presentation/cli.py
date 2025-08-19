@@ -125,6 +125,73 @@ def _cmd_parse_file(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_version(args: argparse.Namespace) -> int:
+    # Print version and language-detector diagnostics without requiring Settings/OPENAI
+    try:
+        from .. import __version__ as ver
+    except Exception:
+        ver = "unknown"
+    info: dict[str, object] = {"ok": True, "version": ver}
+    # Module origins
+    try:
+        import preprocessing as pkg  # type: ignore
+        import preprocessing.presentation.cli as cli_mod  # type: ignore
+        info["package_file"] = getattr(pkg, "__file__", None)
+        info["cli_file"] = getattr(cli_mod, "__file__", None)
+    except Exception:
+        pass
+    # numpy version
+    try:
+        import numpy as _np  # type: ignore
+        info["numpy_version"] = getattr(_np, "__version__", "unknown")
+    except Exception as e:
+        info["numpy_version_error"] = str(e)
+    # fastText availability and model path
+    try:
+        import fasttext  # type: ignore
+        info["fasttext_import"] = True
+        info["fasttext_version"] = getattr(fasttext, "__version__", "unknown")
+    except Exception as e:
+        info["fasttext_import"] = False
+        info["fasttext_error"] = str(e)
+    # Check default model cache path and env override
+    try:
+        import os
+        xdg = os.environ.get("XDG_CACHE_HOME")
+        from pathlib import Path as _P
+        base = _P(xdg) if xdg else (_P.home() / ".cache")
+        cache = base / "habithon" / "fasttext" / "lid.176.ftz"
+        info["model_cache"] = str(cache)
+        info["model_exists"] = cache.exists()
+        info["model_size"] = int(cache.stat().st_size) if cache.exists() else 0
+        mp = os.environ.get("PREPROCESSING_FASTTEXT_MODEL") or os.environ.get("LANGUAGE_MODEL_PATH")
+        if mp:
+            info["model_env_override"] = mp
+        # Probe predict() to surface numpy/fasttext runtime issues
+        try:
+            if info.get("fasttext_import") and cache.exists():
+                import fasttext as _ft  # type: ignore
+                md = _ft.load_model(str(cache))
+                labels, probs = md.predict("hello", k=1)
+                # Normalize output
+                lbl = str(labels[0]) if labels else ""
+                if lbl.startswith("__label__"):
+                    lbl = lbl.replace("__label__", "", 1)
+                pr = float(probs[0]) if probs else 0.0
+                info["fasttext_predict_ok"] = True
+                info["fasttext_predict"] = [lbl, pr]
+            else:
+                info["fasttext_predict_ok"] = False
+                info["fasttext_predict_error"] = "model_missing_or_fasttext_not_imported"
+        except Exception as e:
+            info["fasttext_predict_ok"] = False
+            info["fasttext_predict_error"] = str(e)
+    except Exception:
+        pass
+    print(json.dumps(info, ensure_ascii=False))
+    return 0
+
+
 def build_cli() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="preprocessing", description="Preprocessing CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -139,6 +206,10 @@ def build_cli() -> argparse.ArgumentParser:
     p2 = sub.add_parser("parse-file", help="Parse a single file and print basic metadata")
     p2.add_argument("path", help="Path to a file to parse")
     p2.set_defaults(func=_cmd_parse_file)
+
+    # New: version subcommand
+    p3 = sub.add_parser("version", help="Print version and diagnostics")
+    p3.set_defaults(func=_cmd_version)
 
     return parser
 

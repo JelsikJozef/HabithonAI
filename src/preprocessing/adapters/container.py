@@ -9,6 +9,8 @@ from .parsers import ParserRegistry, TxtParser, PdfParser, DocxParser, MsgParser
 from .dedup import InMemoryDedup
 from .quality import QualityChecker
 from .enrichment import MetadataEnricher
+# Language detector adapter
+from .language import FastTextLanguageDetector
 # App services
 from ..app import (
     ParseService,
@@ -64,7 +66,17 @@ class Container:
         parse = ParseService(registry)
         # Normalization and metadata enrichment
         normalize = NormalizeService()
-        enricher = MetadataEnricher()
+        # Instantiate fastText language detector; fall back gracefully if unavailable
+        lang_detector_cb = None
+        try:
+            detector = FastTextLanguageDetector(
+                model_path=settings.language_model_path,
+                min_confidence=float(getattr(settings, "language_min_confidence", 0.5)),
+            )
+            lang_detector_cb = detector.detect
+        except Exception as e:
+            logger.warning("FastTextLanguageDetector unavailable, falling back to built-in heuristics: %s", e)
+        enricher = MetadataEnricher(lang_detector=lang_detector_cb)
         meta = MetadataEnrichmentService(enricher)
         # Dedup and quality
         dedup_store = InMemoryDedup()

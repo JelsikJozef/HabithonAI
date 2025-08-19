@@ -45,10 +45,9 @@ sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils
 A small CLI is provided via the `preprocessing` console script.
 
 ```bash
-# Batch preprocess a directory into JSONL
+# Batch preprocess a directory into JSONL (LLM enrichment is mandatory)
 preprocessing preprocess INPUT_DIR --out output.jsonl \
   --ocr            # enable OCR for PDFs/images (optional) \
-  --llm            # enable LLM enrichment (dummy client by default, optional) \
   --globs "**/*.pdf" --globs "**/*.txt"   # override file patterns (optional)
 
 # Parse a single file and print a brief JSON summary
@@ -58,6 +57,7 @@ preprocessing parse-file /path/to/file.pdf
 Notes:
 - OCR requires `tesseract`, `poppler` and Python packages from the `ocr` extra.
 - Parsers for PDF/DOCX/MSG require the `parsers` extra.
+- OPENAI_API_KEY must be set in your environment (or .env) for the CLI to run.
 
 ## Python API
 
@@ -69,7 +69,7 @@ from preprocessing.app import IngestionService
 from preprocessing.adapters.ingestion.file_system import FileSystemIngestion
 
 # Build a default pipeline that writes JSONL
-pipe = Container.default_pipeline(Path("out.jsonl"), enable_ocr=False, enable_llm=False)
+pipe = Container.default_pipeline(Path("out.jsonl"), enable_ocr=False)
 
 # Ingest a batch of files and process them
 ing = IngestionService(FileSystemIngestion())
@@ -87,7 +87,7 @@ pipe._serialize.close()
 - Parsers: TXT, PDF (pdfminer), DOCX (python-docx), MSG (extract_msg), images (with inline OCR best-effort)
 - OCR: Tesseract via `pdf2image` + `pytesseract`
 - Normalization: whitespace collapse, NFKC, simple header/footer stripping
-- Enrichment: language/token/length heuristics; optional LLM summaries/keywords
+- Enrichment: language/token/length heuristics; LLM summaries/keywords (mandatory)
 - Dedup: in-memory store
 - Quality: simple thresholds + metrics
 - Serialization: JSON Lines output
@@ -103,7 +103,7 @@ High-level pipeline for one document:
 5) Metadata: MetadataEnricher adds language/hash/token counts and basic stats
 6) Deduplicate: DedupService checks content hash (InMemoryDedup by default)
 7) Quality: QualityService evaluates length thresholds and metrics
-8) LLM (optional): LlmEnricher adds summary and keywords
+8) LLM: LlmEnrichmentService adds summary and keywords (run halts on LLM failure)
 9) Serialize: JsonlSerializer appends one JSON record per line
 
 Flow (optional diagram):
@@ -120,9 +120,7 @@ flowchart LR
   G -->|duplicate| H[Skip]
   G -->|unique| I[QualityService + QualityChecker]
   I -->|fail| H
-  I -->|ok| J{LLM?}
-  J -->|no| K[SerializeService + JsonlSerializer]
-  J -->|yes| L[LlmEnrichmentService + LlmEnricher] --> K
+  I -->|ok| L[LlmEnrichmentService + LlmEnricher] --> K[SerializeService + JsonlSerializer]
 ```
 
 Batch vs watch:
@@ -143,6 +141,7 @@ Record schema (JSONL):
 - If OCR text is empty, verify `tesseract` and `poppler` are installed and on PATH.
 - For PDFs that fail to rasterize, try `pdftoppm -v` to confirm Poppler is available.
 - On Windows, install Tesseract from the official installer and configure environment variables accordingly.
+- If you see "OPENAI_API_KEY is required but not set", define it in your shell or put it in a .env file.
 
 ## License
 

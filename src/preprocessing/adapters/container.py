@@ -20,7 +20,7 @@ from .serializer import JsonlSerializer
 from .serializer.per_file_jsonl import PerFileJsonlSerializer
 from .dedup import InMemoryDedup
 from .quality import QualityChecker
-from .enrichment import MetadataEnricher, LlmEnricher
+from .enrichment import MetadataEnricher
 from .enrichment.llm_openai_enricher import OpenAiLlmEnricher
 from .ocr import PdfOcr
 # App services
@@ -66,7 +66,6 @@ class Container:
         output_jsonl: Path,
         *,
         enable_ocr: bool = False,
-        enable_llm: bool = False,
     ) -> PreprocessPipeline:
         # Parsers and parse service
         registry = Container.default_registry()
@@ -127,47 +126,33 @@ class Container:
         except Exception as e:
             logger.warning("Anonymization bridge unavailable: %s", e)
             anonymize_bridge = None
-        # LLM
-        # Auto-enable when OPENAI_API_KEY is present
+        # LLM (mandatory)
         dotenv_path = find_dotenv()
         if dotenv_path:
             load_dotenv(dotenv_path)
         else:
             load_dotenv()
-        env_has_key = bool(os.getenv("OPENAI_API_KEY"))
-        should_llm = enable_llm or env_has_key
-        llm_service = None
-        if should_llm:
-            try:
-                from .enrichment.openai_client import OpenAiClient  # lazy import
-                # Instantiate detectors and vault once for anonymization service
-                from anonymization.adapters.container import build_default as _build_anon
-                detectors, vault = _build_anon()
-                anonymizer = LlmAnonymisationService(detectors, vault)
-                # Real OpenAI enricher that does a single-shot call
-                llm_client = OpenAiClient()
-                model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-                llm_port = OpenAiLlmEnricher(llm_client, model=model, max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")))
-                from ..app.llm_enrich import LlmEnrichmentService as _LlmSvc
-                llm_service = _LlmSvc(llm_port, anonymizer=anonymizer)
-                logger.info("LLM enabled (OpenAI model=%s)", model)
-            except Exception as e:
-                # Fallback to OpenAiLlmEnricher with no-op client so heuristics kick in
-                logger.warning("LLM wiring failed (%s); using local heuristics fallback", e)
-                class _NoopClient:
-                    def generate_summary_and_tags(self, *, text: str, model: str | None = None, max_tokens: int = 512):
-                        return "", []
-                llm_port = OpenAiLlmEnricher(_NoopClient())
-                from ..app.llm_enrich import LlmEnrichmentService as _LlmSvc
-                # still provide anonymizer
-                try:
-                    from anonymization.adapters.container import build_default as _build_anon2
-                    detectors2, vault2 = _build_anon2()
-                    anonymizer2 = LlmAnonymisationService(detectors2, vault2)
-                except Exception:
-                    anonymizer2 = None
-                llm_service = _LlmSvc(llm_port, anonymizer=anonymizer2)
-        else:
-            logger.info("LLM disabled (no --llm and no OPENAI_API_KEY)")
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "OPENAI_API_KEY is required but not set. Set it in your environment or .env file to run preprocessing."
+            )
+        try:
+            from .enrichment.openai_client import OpenAiClient  # lazy import
+            # Instantiate detectors and vault once for anonymization service
+            from anonymization.adapters.container import build_default as _build_anon2
+            detectors2, vault2 = _build_anon2()
+            anonymizer = LlmAnonymisationService(detectors2, vault2)
+            # Real OpenAI enricher that does a single-shot call
+            llm_client = OpenAiClient(api_key=api_key)
+            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            llm_port = OpenAiLlmEnricher(llm_client, model=model, max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")))
+            from ..app.llm_enrich import LlmEnrichmentService as _LlmSvc
+            llm_service = _LlmSvc(llm_port, anonymizer=anonymizer)
+            logger.info("LLM enabled (OpenAI model=%s)", model)
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to initialize LLM enrichment: %s. Ensure OPENAI_API_KEY is valid and openai package is installed." % (e,)
+            )
         # Compose pipeline
         return PreprocessPipeline(parse, normalize, meta, dedup, quality, serialize, ocr=ocr_service, llm=llm_service, anonymize=anonymize_bridge)

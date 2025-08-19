@@ -23,13 +23,19 @@ class OpenAiClient:
         load_dotenv()
         self._api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self._api_key:
-            raise RuntimeError("OPENAI_API_KEY not set in environment")
+            raise RuntimeError("OPENAI_API_KEY is required but not set")
         # Lazy import to avoid hard dependency in environments without openai
         try:
             from openai import OpenAI  # type: ignore
-        except Exception as e:  # pragma: no cover - only executes when missing
-            raise RuntimeError("openai package is not installed") from e
+        except Exception:  # pragma: no cover - only executes when missing
+            raise RuntimeError("openai package is not installed")
         self._client = OpenAI(api_key=self._api_key)
+        # Validate key early with a minimal authenticated call
+        try:
+            # Prefer listing models; it's lightweight and checks auth
+            _ = self._client.models.list()
+        except Exception:
+            raise RuntimeError("Invalid or unauthorized OPENAI_API_KEY")
 
     def complete(self, *, prompt: str, model: str, max_tokens: int = 512) -> str:
         try:
@@ -86,8 +92,8 @@ class OpenAiClient:
             content = getattr(resp.choices[0].message, "content", "") or ""
         except Exception:
             content = ""
-        summary: str = ""
-        tags: List[str] = []
+        summary = ""  # type: str
+        tags = []      # type: List[str]
         # Try strict JSON parse first
         try:
             obj = json.loads(content)

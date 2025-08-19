@@ -4,6 +4,7 @@ from pathlib import Path
 import hashlib
 import logging
 from typing import Optional
+import os
 
 # Adapters (ports)
 from preprocessing.adapters.serializer import JsonlSerializer
@@ -69,6 +70,16 @@ def build_anonymization_bridge(settings: Settings) -> Optional[AnonymizationBrid
     Returns None when anonymization is not available.
     """
     try:
+        # Propagate Presidio configuration via environment (adapter layer only)
+        if settings.presidio_langs:
+            os.environ.setdefault("ANON_PRESIDIO_LANGS", settings.presidio_langs)
+        if settings.presidio_fallback_model:
+            os.environ.setdefault("ANON_PRESIDIO_FALLBACK_MODEL", settings.presidio_fallback_model)
+        if settings.presidio_patterns_path:
+            os.environ.setdefault("ANON_PRESIDIO_PATTERNS", settings.presidio_patterns_path)
+        if settings.presidio_disable_fallback:
+            os.environ.setdefault("ANON_PRESIDIO_DISABLE_FALLBACK", "1")
+
         from anonymization.adapters.container import build_default as _build_anon
         from anonymization.app.detect import detect_all as _detect_all
         from anonymization.app.pseudonymize import pseudonymize as _pseudonymize
@@ -113,7 +124,11 @@ def build_anonymization_bridge(settings: Settings) -> Optional[AnonymizationBrid
                     out_parts = []
                     mappings = []
                     cursor = 0
-                    counters = {}
+                    counters: dict[str, int] = {}
+
+                    def _map_token_type(t: str) -> str:
+                        return {"PERSON": "NAME", "ORGANIZATION": "COMPANY"}.get(t, t)
+
                     for ent in ents:
                         s = ent["start"]
                         epos = ent["end"]
@@ -121,15 +136,16 @@ def build_anonymization_bridge(settings: Settings) -> Optional[AnonymizationBrid
                             # overlapping or unsorted; skip to avoid corrupt output
                             continue
                         out_parts.append(text[cursor:s])
-                        t = ent["type"]
-                        counters[t] = counters.get(t, 0) + 1
+                        original_type = str(ent["type"]) if ent.get("type") is not None else ""
+                        token_type = _map_token_type(original_type)
+                        counters[token_type] = counters.get(token_type, 0) + 1
                         token = "{{PII:%s:%d:%s}}" % (
-                            t,
-                            counters[t],
-                            hashlib.sha256((t + str(counters[t])).encode()).hexdigest()[:8],
+                            token_type,
+                            counters[token_type],
+                            hashlib.sha256((token_type + str(counters[token_type])).encode()).hexdigest()[:8],
                         )
                         out_parts.append(token)
-                        mappings.append({"token": token, "value": ent["value"], "type": t})
+                        mappings.append({"token": token, "value": ent["value"], "type": original_type})
                         cursor = epos
                     out_parts.append(text[cursor:])
                     pseudonymized = "".join(out_parts)
@@ -148,7 +164,7 @@ def build_anonymization_bridge(settings: Settings) -> Optional[AnonymizationBrid
             _PseudoWrapper(),
             policy={"include_text": bool(settings.anonymization_include_text)},
         )
-        logger.info("Anonymization bridge enabled (regex/presidio per env)")
+        logger.info("Anonymization bridge enabled (Presidio-only)")
         return bridge
     except Exception as e:
         logger.warning("Anonymization bridge unavailable: %s", e)

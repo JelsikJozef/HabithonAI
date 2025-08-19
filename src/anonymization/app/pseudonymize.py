@@ -10,6 +10,15 @@ def _make_token(entity_type: str, index: int) -> str:
     return f"{{{{PII:{entity_type}:{index}:{uuid4().hex[:8]}}}}}"
 
 
+def _map_token_type(entity_type: str) -> str:
+    # Map incoming entity types to desired token categories
+    mapping = {
+        "PERSON": "NAME",
+        "ORGANIZATION": "COMPANY",
+    }
+    return mapping.get(entity_type, entity_type)
+
+
 def pseudonymize(
     text: str,
     detectors: List[DetectorPort],
@@ -28,9 +37,11 @@ def pseudonymize(
 
     for ent in entities:
         out_parts.append(text[cursor:ent.start])
-        counters[ent.type] = counters.get(ent.type, 0) + 1
-        token = _make_token(ent.type, counters[ent.type])
+        token_type = _map_token_type(ent.type)
+        counters[token_type] = counters.get(token_type, 0) + 1
+        token = _make_token(token_type, counters[token_type])
         out_parts.append(token)
+        # store original type for reference; deanonymize uses the token string for replacement
         mappings.append(TokenMapping(token=token, value=ent.value, type=ent.type))
         cursor = ent.end
 
@@ -45,4 +56,3 @@ def pseudonymize(
         pseudonymized_text=pseudonymized,
         mappings=mappings,
     )
-

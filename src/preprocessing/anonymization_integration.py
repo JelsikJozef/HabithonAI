@@ -31,6 +31,8 @@ class AnonymizationBridge:
     def run(self, doc: ParsedDocument) -> ParsedDocument:
         text = doc.text or ""
         language = doc.language
+        # Compute a stable context id for mapping reuse (prefer document hash). If missing, let pseudonymizer derive it.
+        ctx_id_hint = getattr(doc, "hash", None) or None
         # Run detection
         try:
             det_res = self._call_detect(text, language)
@@ -39,12 +41,21 @@ class AnonymizationBridge:
         entities = self._normalize_entities(det_res)
         pii_count = len(entities)
 
-        # Run pseudonymization
+        # Run pseudonymization (pass context_id and entities when supported)
         pseudo_text = ""
         mappings: list[dict[str, Any]] = []
+        actual_ctx: str | None = ctx_id_hint
         try:
-            pseudo_res = self._call_pseudonymize(text, language)
+            pseudo_res = self._call_pseudonymize(text, language, context_id=ctx_id_hint, entities=entities)
             pseudo_text, mappings = self._normalize_pseudonymize(pseudo_res)
+            # Capture context id from result if provided
+            if isinstance(pseudo_res, dict) and pseudo_res.get("context_id"):
+                actual_ctx = str(pseudo_res["context_id"])  # type: ignore[index]
+            elif hasattr(pseudo_res, "context_id"):
+                try:
+                    actual_ctx = str(getattr(pseudo_res, "context_id"))
+                except Exception:
+                    pass
         except Exception:
             pseudo_text, mappings = "", []
         token_spans = [{"token": m.get("token"), "type": m.get("type")} for m in mappings if m.get("token")]
@@ -58,8 +69,11 @@ class AnonymizationBridge:
             "token_spans": token_spans,
             "pseudonymized": changed,
         })
-        if self._include_text():
-            meta["text_pseudo"] = pseudo_text if changed else text
+        # Always expose context id and pseudonymized text for downstream LLM step
+        if actual_ctx:
+            meta["anon_context_id"] = actual_ctx
+        # Always provide text_pseudo, using original text when no change
+        meta["text_pseudo"] = pseudo_text if changed else text
 
         return replace(doc, metadata=meta)
 
@@ -84,23 +98,42 @@ class AnonymizationBridge:
                 return d(text)
         return []
 
-    def _call_pseudonymize(self, text: str, language: str | None) -> Any:
+    def _call_pseudonymize(self, text: str, language: str | None, *, context_id: str | None = None, entities: list[dict[str, Any]] | None = None) -> Any:
         p = self._pseudonymize
         if hasattr(p, "run") and callable(getattr(p, "run")):
+            # Prefer keyword arguments if supported
             try:
-                return p.run(text=text, language=language)
+                return p.run(text=text, language=language, context_id=context_id, entities=entities)
             except TypeError:
-                return p.run(text)
+                try:
+                    return p.run(text=text, language=language, context_id=context_id)
+                except TypeError:
+                    try:
+                        return p.run(text=text, language=language)
+                    except TypeError:
+                        return p.run(text)
         if hasattr(p, "pseudonymize") and callable(getattr(p, "pseudonymize")):
             try:
-                return p.pseudonymize(text, language=language)
+                return p.pseudonymize(text, language=language, context_id=context_id, entities=entities)
             except TypeError:
-                return p.pseudonymize(text)
+                try:
+                    return p.pseudonymize(text, language=language, context_id=context_id)
+                except TypeError:
+                    try:
+                        return p.pseudonymize(text, language=language)
+                    except TypeError:
+                        return p.pseudonymize(text)
         if callable(p):
             try:
-                return p(text=text, language=language)
+                return p(text=text, language=language, context_id=context_id, entities=entities)
             except TypeError:
-                return p(text)
+                try:
+                    return p(text=text, language=language, context_id=context_id)
+                except TypeError:
+                    try:
+                        return p(text=text, language=language)
+                    except TypeError:
+                        return p(text)
         return {"pseudonymized_text": "", "mappings": []}
 
     @staticmethod
@@ -176,4 +209,3 @@ class AnonymizationBridge:
             except Exception:
                 return False
         return False
-

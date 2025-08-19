@@ -12,6 +12,7 @@ from ..adapters import Container
 from ..adapters.ingestion.file_system import FileSystemIngestion
 from ..app import IngestionService, ParseService
 from ..domain.models import RawDocument
+from ..settings import Settings
 
 
 DEFAULT_GLOBS = (
@@ -57,9 +58,16 @@ def _cmd_preprocess(args: argparse.Namespace) -> int:
     _setup_logging(out_path)
     globs = tuple(args.globs) if args.globs else DEFAULT_GLOBS
 
-    # LLM is mandatory; Container will enforce OPENAI_API_KEY at startup
+    # Load settings once (loads .env if present)
     try:
-        pipe = Container.default_pipeline(out_path, enable_ocr=bool(args.ocr))
+        settings = Settings.load()
+    except Exception as e:
+        print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+        return 2
+
+    # LLM is mandatory; Container will be configured via settings
+    try:
+        pipe = Container.default_pipeline(out_path, settings=settings, enable_ocr=bool(args.ocr))
     except Exception as e:
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
         return 2
@@ -72,7 +80,7 @@ def _cmd_preprocess(args: argparse.Namespace) -> int:
     try:
         for idx, doc in enumerate(docs, 1):
             print("Processing file %d: %s" % (idx, getattr(doc, 'path', getattr(doc, 'file_path', 'UNKNOWN'))))
-            stat = pipe.process_one(doc)
+            stat = pipe.process_one(doc, file_index=idx)
             stats_list.append(stat)
     except Exception as e:
         try:

@@ -48,6 +48,7 @@ class NormalizeService:
 
         - Replaces runs of spaces/tabs/form-feeds/vertical-tabs with a single space.
         - Leaves line breaks (\n, \r\n) intact so downstream line-based heuristics work.
+        - Trims trailing horizontal spaces at end-of-line and end-of-text.
         """
         # First, replace horizontal whitespace runs with single space
         text = re.sub(r"[ \t\f\v]+", " ", text)
@@ -55,6 +56,8 @@ class NormalizeService:
         text = re.sub(r"[ \t\f\v]+(?=\r?\n)", "", text)
         # Also trim leading spaces at start of lines
         text = re.sub(r"(?m)^[ \t\f\v]+", "", text)
+        # Finally, trim trailing horizontal spaces at end-of-text
+        text = re.sub(r"[ \t\f\v]+$", "", text)
         return text
 
     @staticmethod

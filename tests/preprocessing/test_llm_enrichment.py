@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 from preprocessing.domain.models import RawDocument, ParsedDocument  # type: ignore
 from preprocessing.app.llm_enrich import LlmEnrichmentService  # type: ignore
-from preprocessing.adapters.enrichment.llm_openai_enricher import OpenAiLlmEnricher  # type: ignore
+from preprocessing.adapters.enrichment.LLM.llm_openai_enricher import OpenAiLlmEnricher  # type: ignore
 from preprocessing.app.llm_anonymize import LlmAnonymisationService  # type: ignore
 from preprocessing.adapters.serializer.jsonl import JsonlSerializer  # type: ignore
 from preprocessing.app.serialize import SerializeService  # type: ignore

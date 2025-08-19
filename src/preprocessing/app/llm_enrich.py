@@ -39,6 +39,12 @@ class LlmEnrichmentService:
 
     def _pseudonymize_for_doc(self, doc: ParsedDocument) -> tuple[str, Optional[str]]:
         text = doc.text or ""
+        meta = doc.metadata or {}
+        # If a previous anonymization step produced pseudonymized text + context, reuse it
+        pre_pseudo = meta.get("text_pseudo")
+        pre_ctx = meta.get("anon_context_id")
+        if isinstance(pre_pseudo, str) and pre_pseudo != "":
+            return pre_pseudo, (str(pre_ctx) if pre_ctx else None)
         # Prefer the anonymizer service if provided
         if self._anonymizer is not None:
             ctx = doc.hash or ""

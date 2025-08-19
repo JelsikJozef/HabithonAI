@@ -10,8 +10,8 @@ from ...domain.models import ParsedDocument
 from ...domain.ports import EnrichmentPort
 
 
-class MetadataEnricher(EnrichmentPort):
-    """Heuristic metadata enrichment.
+class MetadataAnnotator(EnrichmentPort):
+    """Heuristic metadata annotation.
 
     - language: via provided lang_detector(text)->str or simple heuristic ("sk" vs "en" or None).
     - hash: SHA-256 of text content as hex string.
@@ -85,3 +85,5 @@ class MetadataEnricher(EnrichmentPort):
                 pass
         return len(text.split())
 
+# Backward-compatible alias
+MetadataEnricher = MetadataAnnotator

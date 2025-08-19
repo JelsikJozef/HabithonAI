@@ -67,9 +67,13 @@ from datetime import datetime
 from preprocessing.adapters import Container
 from preprocessing.app import IngestionService
 from preprocessing.adapters.ingestion.file_system import FileSystemIngestion
+from preprocessing.settings import Settings
+
+# Load settings once (loads .env if present)
+settings = Settings.load()
 
 # Build a default pipeline that writes JSONL
-pipe = Container.default_pipeline(Path("out.jsonl"), enable_ocr=False)
+pipe = Container.default_pipeline(Path("out.jsonl"), settings=settings, enable_ocr=False)
 
 # Ingest a batch of files and process them
 ing = IngestionService(FileSystemIngestion())

@@ -51,11 +51,28 @@ all = [
   "pytesseract>=0.3.10",
   "charset-normalizer>=3.0.0",
   "chardet>=5.0.0",
+  "openai>=1.12.0",
+  "python-dotenv>=1.0.0",
 ]
 
 [project.scripts]
 preprocessing = "preprocessing.presentation.cli:main"
 
+# Explicit setuptools configuration to avoid accidental discovery of sibling packages
+[tool.setuptools]
+include-package-data = true
+
+# Discover from parent (src) and include only preprocessing*
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["preprocessing*"]
+exclude = ["tests*"]
+
+# Map the source root for discovery
+[tool.setuptools.package-dir]
+"" = ".."
+
+# Hatch configuration remains for wheel builds
 [tool.hatch.build.targets.wheel]
 packages = ["preprocessing"]
 

@@ -11,7 +11,7 @@ try:
 except Exception:
     PRESIDIO_AVAILABLE = False
 
-from anonymization.adapters.detectors.presidio_detector import PresidioDetector  # type: ignore
+from anonymization.adapters.detectors.adapter import PresidioDetector  # type: ignore
 from anonymization.adapters.token_vault.file_store import FileTokenVault  # type: ignore
 from anonymization.app.pseudonymize import pseudonymize  # type: ignore
 from anonymization.app.denomize import deanonymize  # type: ignore

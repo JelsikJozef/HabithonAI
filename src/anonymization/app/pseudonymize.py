@@ -26,6 +26,18 @@ def pseudonymize(
     context_id: str,
     language: Optional[str] = None,
 ) -> PseudonymizationResult:
+    """Replace detected PII with stable tokens and persist mappings.
+
+    Parameters
+    - text: Input text to pseudonymize.
+    - detectors: List of DetectorPort instances used to detect PII.
+    - vault: TokenVaultPort used to store token->value mappings for later restoration.
+    - context_id: Identifier for namespacing mappings (e.g., per document or session).
+    - language: Optional ISO language hint forwarded to detectors.
+
+    Returns
+    - PseudonymizationResult including original text, pseudonymized text, and the list of TokenMapping objects saved to the vault.
+    """
     detection = detect_all(text, detectors, language=language)
     entities = detection.entities
 

@@ -93,7 +93,8 @@ class FastTextLanguageDetector:
         # Primary: top-1
         try:
             labels, probs = self._model.predict(sample, k=1)  # type: ignore[call-arg]
-            if labels and probs:
+            # Avoid ambiguous truth-value on numpy arrays by using explicit length checks
+            if labels is not None and probs is not None and len(labels) > 0 and len(probs) > 0:
                 label = str(labels[0])
                 prob = float(probs[0])
                 if label.startswith("__label__"):
@@ -107,7 +108,9 @@ class FastTextLanguageDetector:
         try:
             labels3, probs3 = self._model.predict(sample, k=3)  # type: ignore[call-arg]
             candidates: list[tuple[str, float]] = []
-            for i in range(min(len(labels3 or []), len(probs3 or []))):
+            # Avoid using "or []" on possibly array-like returns
+            n = min(len(labels3) if labels3 is not None else 0, len(probs3) if probs3 is not None else 0)
+            for i in range(n):
                 lab = str(labels3[i])
                 if not lab.startswith("__label__"):
                     continue

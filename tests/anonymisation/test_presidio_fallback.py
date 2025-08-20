@@ -4,7 +4,7 @@ import unittest
 sys.path.insert(0, '/home/habithon1/Documents/HabithonAI/src')
 
 from anonymization.adapters.detectors.regex_detector import RegexDetector
-from anonymization.adapters.detectors.presidio_detector import PresidioDetector
+from anonymization.adapters.detectors.adapter import PresidioDetector
 from anonymization.app.detect import detect_all
 
 

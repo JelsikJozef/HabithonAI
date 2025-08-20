@@ -6,7 +6,7 @@ import unittest
 # Ensure src is importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
 
-from anonymization.adapters.detectors.presidio_detector import PresidioDetector  # type: ignore
+from anonymization.adapters.detectors.adapter import PresidioDetector  # type: ignore
 from anonymization.adapters.token_vault.file_store import FileTokenVault  # type: ignore
 from anonymization.app.pseudonymize import pseudonymize  # type: ignore
 from anonymization.app.denomize import deanonymize  # type: ignore

@@ -8,9 +8,9 @@ Fixer mojibake názvov súborov/priečinkov (UTF-8, stredná Európa, SK/CZ + TR
 - --show-examples zobrazí príklady, kde sa problematické sekvencie nachádzajú
 
 Príklady:
-  python fix_names.py --root ./Knowledge --show-examples
-  python fix_names.py --root ./Knowledge                # dry-run
-  python fix_names.py --root ./Knowledge --apply        # naozaj premenuj
+  python fixer.py  --root ./Knowledge --show-examples
+  python fixer.py --root ./Knowledge                # dry-run
+  python fixer.py --root ./Knowledge --apply        # naozaj premenuj
 
 Pozn.: Nemení obsah súborov, iba názvy.
 """
@@ -72,13 +72,28 @@ class WeirdSequenceFixerExt:
         "├┤": "ô",         # Dôvera
         "─║": "ĺ",         # predĺženie
         "─П": "ď",         # výpoveď
-        "─М": "Č",         # Čestné
+        "─М": "Č",          # Čestné
+        "─Н": "č",          # činnosti
+        "┼б": "č",  # Čestné
         "─З": "ć",         # Kovačević
         "├Н": "Í",         # MARKÍZA
         "┼а": "Š",         # PRERUŠENÝ
         "├Й": "Ý",         # PRERUŠENÝ
         "┼д": "ť",         # ŽIADOSŤ
+        "─╛": "ľ",         #tabuľky
+        "├й": "ý",         # Ktorý
+        "├║": "ú",         # spadajú
+        "├б": "á",          # pracovná
+        "┼╛": "ž",         # Žiadosť
+        "┼╜": "ž",         # Žiadosť
+        "┼е": "ť",         # Žiadosť
+        "├н": "í",         # príplatky
         "tАУ": "–",        # en dash (UTF-8 → cp1251 mojibake)
+
+        #Nemčina (podľa ukážok)
+        "├Я":"ß",  # ß (nemecké dlhé s)
+        "├д":"ä",  # ä (nemecké prehláskované a)
+        "├╝":"ü",  # ü (nemecké prehláskované u)
 
         # Turečtina/poľština/rumunčina (podľa ukážok)
         "┼Ю": "Ş",  # Ş

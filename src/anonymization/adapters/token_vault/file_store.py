@@ -9,7 +9,7 @@ from ...domain.errors import TokenVaultError
 class FileTokenVault(TokenVaultPort):
     """Stores token mappings per context_id in JSON files under a base directory."""
 
-    def __init__(self, base_dir: str = ".anonymization_vault") -> None:
+    def __init__(self, base_dir: str = "src/anonymization/adapters/token_vault/.anonymization_vault") -> None:
         self.base_dir = base_dir
         os.makedirs(self.base_dir, exist_ok=True)
 

@@ -28,6 +28,11 @@ class Settings:
     # Language detection configuration
     language_model_path: Optional[str] = None
     language_min_confidence: float = 0.3
+    # Presidio configuration (adapter layer will propagate to anonymization)
+    presidio_langs: Optional[str] = None  # e.g., "en:en_core_web_sm,de:de_core_news_sm,sk:xx_ent_wiki_sm"
+    presidio_fallback_model: Optional[str] = None  # e.g., "xx_ent_wiki_sm"
+    presidio_patterns_path: Optional[str] = None  # path to JSON/YAML with custom recognizers
+    presidio_disable_fallback: bool = False  # disable internal regex fallback
 
     @staticmethod
     def _to_bool(s: Optional[str], default: bool = False) -> bool:
@@ -45,6 +50,10 @@ class Settings:
         - ANON_INCLUDE_TEXT controls whether to include raw text in outputs alongside pseudonymized text.
         - LANGUAGE_MODEL_PATH optionally points to a local fastText lid.176.ftz file.
         - LANGUAGE_MIN_CONFIDENCE sets the minimum probability to accept a language prediction.
+        - ANON_PRESIDIO_LANGS optionally sets Presidio spaCy models per language.
+        - ANON_PRESIDIO_FALLBACK_MODEL optionally sets a generic multilingual model name.
+        - ANON_PRESIDIO_PATTERNS optionally points to a file with custom recognizers.
+        - ANON_PRESIDIO_DISABLE_FALLBACK disables regex fallback in PresidioDetector.
         """
         if use_dotenv:
             try:
@@ -78,6 +87,11 @@ class Settings:
             lang_min_conf = 0.0
         if lang_min_conf > 1.0:
             lang_min_conf = 1.0
+        # Presidio config reads
+        presidio_langs = os.environ.get("ANON_PRESIDIO_LANGS")
+        presidio_fallback = os.environ.get("ANON_PRESIDIO_FALLBACK_MODEL")
+        presidio_patterns = os.environ.get("ANON_PRESIDIO_PATTERNS")
+        presidio_disable_fallback = cls._to_bool(os.environ.get("ANON_PRESIDIO_DISABLE_FALLBACK"), default=False)
         return cls(
             openai_api_key=key,
             openai_model=model,
@@ -85,4 +99,8 @@ class Settings:
             anonymization_include_text=include_text,
             language_model_path=lang_model_path if lang_model_path else None,
             language_min_confidence=lang_min_conf,
+            presidio_langs=presidio_langs if presidio_langs else None,
+            presidio_fallback_model=presidio_fallback if presidio_fallback else None,
+            presidio_patterns_path=presidio_patterns if presidio_patterns else None,
+            presidio_disable_fallback=presidio_disable_fallback,
         )

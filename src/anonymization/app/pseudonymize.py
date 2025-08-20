@@ -10,6 +10,15 @@ def _make_token(entity_type: str, index: int) -> str:
     return f"{{{{PII:{entity_type}:{index}:{uuid4().hex[:8]}}}}}"
 
 
+def _map_token_type(entity_type: str) -> str:
+    # Map incoming entity types to desired token categories
+    mapping = {
+        "PERSON": "NAME",
+        "ORGANIZATION": "COMPANY",
+    }
+    return mapping.get(entity_type, entity_type)
+
+
 def pseudonymize(
     text: str,
     detectors: List[DetectorPort],
@@ -17,6 +26,18 @@ def pseudonymize(
     context_id: str,
     language: Optional[str] = None,
 ) -> PseudonymizationResult:
+    """Replace detected PII with stable tokens and persist mappings.
+
+    Parameters
+    - text: Input text to pseudonymize.
+    - detectors: List of DetectorPort instances used to detect PII.
+    - vault: TokenVaultPort used to store token->value mappings for later restoration.
+    - context_id: Identifier for namespacing mappings (e.g., per document or session).
+    - language: Optional ISO language hint forwarded to detectors.
+
+    Returns
+    - PseudonymizationResult including original text, pseudonymized text, and the list of TokenMapping objects saved to the vault.
+    """
     detection = detect_all(text, detectors, language=language)
     entities = detection.entities
 
@@ -28,9 +49,11 @@ def pseudonymize(
 
     for ent in entities:
         out_parts.append(text[cursor:ent.start])
-        counters[ent.type] = counters.get(ent.type, 0) + 1
-        token = _make_token(ent.type, counters[ent.type])
+        token_type = _map_token_type(ent.type)
+        counters[token_type] = counters.get(token_type, 0) + 1
+        token = _make_token(token_type, counters[token_type])
         out_parts.append(token)
+        # store original type for reference; deanonymize uses the token string for replacement
         mappings.append(TokenMapping(token=token, value=ent.value, type=ent.type))
         cursor = ent.end
 
@@ -45,4 +68,3 @@ def pseudonymize(
         pseudonymized_text=pseudonymized,
         mappings=mappings,
     )
-

@@ -1,0 +1,38 @@
+FROM python:3.11-slim
+LABEL authors="habithon1"
+
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set workdir
+WORKDIR /app
+
+# Copy anonymization package source
+COPY src/anonymization /app/anonymization
+
+# Install anonymization package with Presidio support
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install /app/anonymization[presidio]
+
+# Configure spaCy language models via PRESIDIO_LANGS env var
+ARG PRESIDIO_LANGS="en:en_core_web_sm"
+ENV PRESIDIO_LANGS=$PRESIDIO_LANGS
+RUN if [ -n "$PRESIDIO_LANGS" ]; then \
+        # ensure spacy is available
+        pip install -U spacy && \
+        # install each specified model
+        for part in $(echo "$PRESIDIO_LANGS" | tr ',' ' '); do \
+            model=$(echo $part | cut -d: -f2); \
+            python3 -m spacy download "$model"; \
+        done; \
+    fi
+
+# Set entrypoint to anonymization CLI
+ENTRYPOINT ["anonymization-cli"]
+CMD ["--help"]

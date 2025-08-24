@@ -8,6 +8,12 @@ __pycache__/
 .dist/
 .venv/
 .env
+Makefile
+outputs
+resources/samples
+build_backup
+docker
+
 
 # Editors
 .vscode/

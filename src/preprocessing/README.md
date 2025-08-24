@@ -1,166 +1,128 @@
-# Habithon Preprocessing
+# Habithon Preprocessing — Folder → Markdown (convert-only)
 
-Document preprocessing pipeline: ingestion → parsing (TXT/PDF/DOCX/MSG/IMAGE) → optional OCR → normalization → metadata enrichment → deduplication → quality → JSONL serialization.
+This package converts documents in a folder to Markdown files (.md), preserving the
+directory structure. It’s intentionally convert-only: no LLMs, anonymization,
+vector stores, or full pipelines. Outputs are UTF-8 with LF newlines and optional
+metadata sidecars.
+
+Supported formats (offline):
+- DOCX (Word)
+- XLSX (Excel)
+- PDF (text extraction via pdfminer.six)
+- MSG (Outlook .msg)
+
+Note: Image OCR (JPG/JPEG) isn’t enabled by default in the CLI. The JPG adapter is
+present as a stub and not included in defaults. Use PDF with OCR externally if needed.
 
 ## Install
 
-From the monorepo root (or the `src/preprocessing` dir):
+From the monorepo root (or src/preprocessing):
 
 ```bash
-# Base (no heavy deps)
+# Base (no heavy parser deps)
 pip install ./src/preprocessing
 
-# With optional parser deps
+# With document parsers (recommended)
 pip install './src/preprocessing[parsers]'
-
-# With OCR + image deps (requires system binaries; see below)
-pip install './src/preprocessing[ocr]'
-
-# With charset detection helpers
-pip install './src/preprocessing[encoding]'
-
-# With language detection (fastText lid.176)
-pip install './src/preprocessing[lang]'
-
-# Everything
-pip install './src/preprocessing[all]'
 ```
 
-### System dependencies (OCR)
+Extras installed by [parsers]:
+- pdfminer.six (PDF)
+- python-docx (DOCX)
+- extract_msg (MSG)
 
-- Tesseract OCR binary
-- Poppler (for `pdf2image`) – required to rasterize PDFs
+## CLI — mdify
 
-macOS (Homebrew):
+Convert a folder to Markdown while preserving the relative structure:
 
 ```bash
-brew install tesseract poppler
+# Minimal
+activate-your-venv-if-needed
+mdify --src ./in --out ./out
+
+# Common options
+mdify --src ./in --out ./out \
+  --include-ext .pdf .docx .xlsx .msg \
+  --exclude-glob '**/~$*' '**/tmp/**' \
+  --skip-existing \
+  --workers 4 \
+  --report ./out/run.json \
+  --log-file ./out/cli_run.log
+
+# Plan only (no writes)
+mdify --src ./in --out ./out --dry-run --progress plain
 ```
 
-Ubuntu/Debian:
+Behavior:
+- Mapping: src_dir/a/b/file.docx → out_dir/a/b/file.md
+- Assets: If an adapter exports assets, they’re placed under out_dir/.../assets/ by default
+- Metadata: --write-meta sidecar|inline|none (default sidecar writes file.md.meta.json)
+- Newlines: normalized to LF by default (--normalize-eol lf|keep)
+- Defaults: include extensions .docx .xlsx .pdf .msg (case-insensitive); JPG/JPEG are not processed by default
+- Selection: use --exclude-glob to skip paths under --src; cap with --max-files
+- Logging: --log-level ERROR|WARNING|INFO|DEBUG; optional --log-file (default outputs/logs/cli_run.log)
+- Progress: --progress auto|plain|none (auto degrades to plain)
 
-```bash
-sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils
-```
+Run `mdify --help` for all options (scanning filters, overwrite policy, progress UI, etc.).
 
-## CLI
+Exit codes:
+- 0 → all selected files converted successfully
+- 1 → completed with some errors (at least one file failed)
+- 2 → argument/usage error (invalid paths/options)
+- 3 → fatal initialization error (app layer unavailable or crashed)
 
-A small CLI is provided via the `preprocessing` console script.
-
-```bash
-# Batch preprocess a directory into JSONL (LLM enrichment is mandatory)
-preprocessing preprocess INPUT_DIR --out output.jsonl \
-  --ocr            # enable OCR for PDFs/images (optional) \
-  --globs "**/*.pdf" --globs "**/*.txt"   # override file patterns (optional)
-
-# Parse a single file and print a brief JSON summary
-preprocessing parse-file /path/to/file.pdf
-```
-
-Notes:
-- OCR requires `tesseract`, `poppler` and Python packages from the `ocr` extra.
-- Parsers for PDF/DOCX/MSG require the `parsers` extra.
-- For language detection, install the `lang` extra or `all`. The first run will download the fastText model unless you provide a local path.
-- OPENAI_API_KEY must be set in your environment (or .env) for the CLI to run.
-
-## Python API
+## Python API (lightweight)
 
 ```python
 from pathlib import Path
-from datetime import datetime
-from preprocessing.adapters import Container
-from preprocessing.app import IngestionService
-from preprocessing.adapters.ingestion.file_system import FileSystemIngestion
-from preprocessing.settings import Settings
+from preprocessing.app.convert_only import plan_folder, convert_folder
 
-# Load settings once (loads .env if present)
-settings = Settings.load()
+cfg = {
+    "scan": {
+        "recurse": True,
+        "include_ext": [".pdf", ".docx", ".xlsx", ".msg"],
+        "exclude_glob": [],
+    },
+    "write": {
+        "overwrite": False,
+        "assets_subdir": "assets",
+        "write_meta": "sidecar",
+        "normalize_eol": "lf",
+    },
+    "runtime": {"workers": 2, "on_error": "skip", "dry_run": False, "strict": False},
+    "ui": {"log_level": "INFO", "progress": "plain"},
+    "report": "./out/run.json",
+}
 
-# Build a default pipeline that writes JSONL
-pipe = Container.default_pipeline(Path("out.jsonl"), settings=settings, enable_ocr=False)
+# Compute a deterministic plan without writing
+plan = plan_folder(Path("./in"), Path("./out"), cfg)
 
-# Ingest a batch of files and process them
-ing = IngestionService(FileSystemIngestion())
-docs = ing.ingest_batch(Path("/data"), ("**/*.txt", "**/*.pdf"))
-stats = pipe.process_many(docs)
-print(stats)
-
-# Always close the serializer when done
-pipe._serialize.close()
+# Execute conversion
+run = convert_folder(Path("./in"), Path("./out"), cfg)
+print(run.converted_ok, "converted,", run.failed, "failed")
 ```
 
-## Features
+## Supported formats and dependencies
 
-- Ingestion: filesystem batch scan and simple async watch
-- Parsers: TXT, PDF (pdfminer), DOCX (python-docx), MSG (extract_msg), images (with inline OCR best-effort)
-- OCR: Tesseract via `pdf2image` + `pytesseract`
-- Normalization: whitespace collapse, NFKC, simple header/footer stripping
-- Enrichment: hash/token/length stats; language detection via fastText (lid.176) for 176 languages
-- Dedup: in-memory store
-- Quality: simple thresholds + metrics
-- Serialization: JSON Lines output
+- DOCX → Markdown: requires python-docx
+- XLSX → Markdown: no extra runtime deps (pure Python ZIP/XML)
+- PDF → Markdown: requires pdfminer.six
+- MSG → Markdown: requires extract_msg
 
-## Language detection
+Install them via the `[parsers]` extra as shown above.
 
-- Engine: fastText lid.176 model (176 languages). The detector predicts the ISO 639‑1 code, e.g. `en`, `sk`, `de`.
-- Confidence: predictions below a configurable threshold are ignored and `language` is set to `null`.
-- Fallbacks: when language can’t be reliably detected (`None`), the anonymization engine uses its default Presidio model; LLM enrichment continues unchanged.
-- Configuration (via .env or environment):
-  - LANGUAGE_MODEL_PATH: path to `lid.176.ftz`. If not provided, the model is cached under `~/.cache/habithon/fasttext/` on first use.
-  - LANGUAGE_MIN_CONFIDENCE: float in [0,1], default `0.5`.
-  - PREPROCESSING_FASTTEXT_MODEL: alternative env var to point to the model file.
+## Determinism and mapping
 
-## Workflow
-
-High-level pipeline for one document:
-
-1) Ingestion: discover files via FileSystemIngestion (batch or watch)
-2) Parse: ParserRegistry selects a parser by extension (Txt/Pdf/Docx/Msg/Image)
-3) OCR (optional): OcrService runs PdfOcr when text is too short for pdf/png/jpg
-4) Normalize: NormalizeService collapses whitespace, applies NFKC, strips headers
-5) Metadata: MetadataEnricher adds language (fastText), hash, token counts, and basic stats
-6) Deduplicate: DedupService checks content hash (InMemoryDedup by default)
-7) Quality: QualityService evaluates length thresholds and metrics
-8) LLM: LlmEnrichmentService adds summary and keywords (run halts on LLM failure)
-9) Serialize: JsonlSerializer appends one JSON record per line
-
-Flow (optional diagram):
-
-```mermaid
-flowchart LR
-  A[Files on disk] --> B[IngestionService + FileSystemIngestion]
-  B --> C[ParseService + ParserRegistry]
-  C -->|short text & ocrable| D[OcrService + PdfOcr]
-  C -->|ok| E[NormalizeService]
-  D --> E
-  E --> F[MetadataEnrichmentService + MetadataEnricher]
-  F --> G[DedupService + InMemoryDedup]
-  G -->|duplicate| H[Skip]
-  G -->|unique| I[QualityService + QualityChecker]
-  I -->|fail| H
-  I -->|ok| L[LlmEnrichmentService + LlmEnricher] --> K[SerializeService + JsonlSerializer]
-```
-
-Batch vs watch:
-- Batch: IngestionService.ingest_batch(root, globs) yields RawDocument for matching files.
-- Watch: IngestionService.ingest_watch(...) streams new/modified files (adapter uses polling).
-
-Record schema (JSONL):
-- text: string
-- source: { path, size, mtime, ext, meta }
-- charset: optional string
-- language: optional string
-- hash: optional string (content hash)
-- tokens: optional int
-- metadata: object (parser/ocr/enrichment/llm flags and stats)
+- Relative structure from --src is preserved under --out.
+- Output text is UTF-8 with LF by default; control chars removed (TAB/LF kept).
+- Per-file assets (when any) go to a sibling assets/ directory by default.
 
 ## Troubleshooting
 
-- If OCR text is empty, verify `tesseract` and `poppler` are installed and on PATH.
-- For PDFs that fail to rasterize, try `pdftoppm -v` to confirm Poppler is available.
-- On Windows, install Tesseract from the official installer and configure environment variables accordingly.
-- If you see "OPENAI_API_KEY is required but not set", define it in your shell or put it in a .env file.
-- If language detection doesn’t run or downloads fail: ensure the `lang` extra is installed, set `LANGUAGE_MODEL_PATH` to a local `lid.176.ftz`, or allow outgoing network to fetch the model once.
+- “No parser for extension …”: ensure you installed the `[parsers]` extra.
+- PDF extraction errors: verify `pdfminer.six` is installed in the same environment.
+- DOCX/MSG imports failing: check that `python-docx`/`extract_msg` are installed.
+- Newlines look odd on Windows: outputs are LF by default; use `--normalize-eol keep` if needed.
 
 ## License
 

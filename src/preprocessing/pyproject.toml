@@ -4,23 +4,35 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "habithon-preprocessing"
-version = "0.1.0"
-description = "Document preprocessing pipeline: ingestion, parsing, OCR, normalization, enrichment, dedup, quality, serialization."
+version = "0.2.1"
+description = "Convert-only folder→Markdown tool with the mdify CLI (batch DOCX/XLSX/PDF/MSG to .md; no LLM/OCR pipeline)."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
   { name = "HabithonAI" }
 ]
-keywords = ["preprocessing", "ingestion", "ocr", "parsing", "nlp", "document" ]
+license = { text = "MIT" }
+keywords = [
+  "markdown",
+  "converter",
+  "docx",
+  "pdf",
+  "xlsx",
+  "msg",
+  "batch",
+  "cli",
+  "mdify",
+  "convert-only"
+]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11",
   "License :: OSI Approved :: MIT License",
   "Intended Audience :: Developers",
-  "Topic :: Text Processing :: General",
+  "Topic :: Text Processing :: Markup",
 ]
-# Core package has no hard runtime deps; features are optional.
+# Core package has no hard runtime deps; parser backends are optional extras.
 dependencies = []
 
 [project.optional-dependencies]
@@ -29,38 +41,17 @@ parsers = [
   "python-docx>=0.8.11",
   "extract_msg>=0.48.5",
 ]
-ocr = [
-  "pdf2image>=1.17.0",
-  "pillow>=10.0.0",
-  "pytesseract>=0.3.10",
-]
-encoding = [
-  "charset-normalizer>=3.0.0",
-  "chardet>=5.0.0",
-]
-llm = [
-  "openai>=1.12.0",
-  "python-dotenv>=1.0.0",
-]
-lang = [
-  # fastText language identification runtime
-  "fasttext>=0.9.2",
-]
+# Back-compat umbrella; currently same as 'parsers'
 all = [
   "pdfminer.six>=20221105",
   "python-docx>=0.8.11",
   "extract_msg>=0.48.5",
-  "pdf2image>=1.17.0",
-  "pillow>=10.0.0",
-  "pytesseract>=0.3.10",
-  "charset-normalizer>=3.0.0",
-  "chardet>=5.0.0",
-  "openai>=1.12.0",
-  "python-dotenv>=1.0.0",
-  "fasttext>=0.9.2",
 ]
 
 [project.scripts]
+# New primary entry
+mdify = "preprocessing.presentation.cli:main"
+# Legacy entry for backward compatibility
 preprocessing = "preprocessing.presentation.cli:main"
 
 # Explicit setuptools configuration to avoid accidental discovery of sibling packages

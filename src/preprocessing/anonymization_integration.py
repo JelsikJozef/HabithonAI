@@ -10,7 +10,7 @@ class AnonymizationBridge:
     """Bridge to use anonymization package use-cases within preprocessing.
 
     Constructor accepts either callables or concrete use-case instances. The callables/instances
-    must be pre-configured to run detection/pseudonymization when invoked with text (and optionally language).
+    must be pre-configured to run langid/pseudonymization when invoked with text (and optionally language).
 
     - detect_pii: Callable[[str], list[dict]] | object with .run(text) or .detect(text)
     - pseudonymize: Callable[[str], dict] | object with .run(text) or .pseudonymize(text)
@@ -33,7 +33,7 @@ class AnonymizationBridge:
         language = doc.language
         # Compute a stable context id for mapping reuse (prefer document hash). If missing, let pseudonymizer derive it.
         ctx_id_hint = getattr(doc, "hash", None) or None
-        # Run detection
+        # Run langid
         try:
             det_res = self._call_detect(text, language)
         except Exception:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Helper script to download machine translation (NMT) models (Marian, M2M100, NLLB) into the local cache.
+Helper script to download machine translate (NMT) models (Marian, M2M100, NLLB) into the local cache.
 Prepares the environment so translations work offline without network access.
 
 Module CLI Parameters:

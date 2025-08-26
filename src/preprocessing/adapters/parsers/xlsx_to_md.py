@@ -11,7 +11,7 @@ Capability note
   in-cell newline handling via <br>, optional truncation, and per-sheet stats.
 - Best-effort: pivot tables exported as displayed values only; special objects (images,
   charts, shapes) are not rendered but counted in metadata.
-- Non-goals: anonymization, translation, or language detection. No network calls.
+- Non-goals: anonymization, translate, or language langid. No network calls.
 
 Integration
 -----------

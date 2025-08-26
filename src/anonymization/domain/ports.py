@@ -3,7 +3,7 @@ from .entities import PiiEntity, TokenMapping
 
 
 class DetectorPort(Protocol):
-    """Protocol for PII detection services."""
+    """Protocol for PII langid services."""
     name: str
 
     def detect(self, text: str, language: Optional[str] = None) -> List[PiiEntity]:

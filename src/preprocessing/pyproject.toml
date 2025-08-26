@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "habithon-preprocessing"
-version = "0.3.0"
+version = "0.3.1"
 description = "Folder→Markdown converter with optional offline English translation (ct2_nllb / marian_opus) via the mdify CLI."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -60,6 +60,8 @@ marian = [
   "transformers>=4.38.0",
   "torch>=2.1.0",
   "sentencepiece>=0.1.99",
+  "sacremoses>=0.0.53",
+  "huggingface-hub>=0.21.0",
 ]
 # Convenience umbrella
 all = [
@@ -76,6 +78,8 @@ all = [
   "transformers>=4.38.0",
   "torch>=2.1.0",
   "sentencepiece>=0.1.99",
+  "sacremoses>=0.0.53",
+  "huggingface-hub>=0.21.0",
 ]
 
 [project.scripts]
@@ -90,19 +94,19 @@ mt-download = "scripts.download_models:main"
 [tool.setuptools]
 include-package-data = true
 
-# Discover from parent (src) and include only preprocessing*
+# Discover from parent (src) and include preprocessing* and scripts*
 [tool.setuptools.packages.find]
 where = [".."]
-include = ["preprocessing*"]
+include = ["preprocessing*", "scripts*"]
 exclude = ["tests*"]
 
 # Map the source root for discovery
 [tool.setuptools.package-dir]
 "" = ".."
 
-# Hatch configuration remains for wheel builds
+# Hatch configuration for wheel builds
 [tool.hatch.build.targets.wheel]
-packages = ["preprocessing"]
+packages = ["preprocessing", "scripts"]
 
 [tool.hatch.version]
 path = "preprocessing/__init__.py"

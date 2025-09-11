@@ -12,14 +12,27 @@ General rules:
 - All arguments and return values must be JSON-serializable or domain models.
 - Methods that perform writes must document atomicity and idempotency policies.
 - "Raises" sections list domain errors only.
+
+Contracts (applies to all ports in this module):
+- Text encoding: All text passed in/out is UTF-8 encodable with LF ("\n") newlines only.
+- Language codes: Lowercase, two-letter where possible (e.g., "sk", "de", "cs", "pl", "hu", "en").
+  Adapters may map extended tags internally, but the port contract stays simple.
+- Immutability: Input domain models (e.g., MarkdownDoc) must not be mutated; return new objects.
+- Determinism: Identical inputs and configuration must yield identical outputs (including whitespace).
+- Structure preservation (TranslatePort): Markdown structure (headings, lists, tables, code/link/image tokens)
+  must be preserved; only text nodes are translated.
+- Telemetry context: Methods may accept optional "context" dicts for logging/telemetry. Implementations
+  may ignore them but must never fail because a context is provided.
+- Concurrency: Read-only operations should be thread-safe; adapters may batch internally within documented limits.
 """
 
 from pathlib import Path
-from typing import Any, AsyncIterator, Iterable, Protocol, TYPE_CHECKING, TypedDict, Optional, runtime_checkable
+from typing import Any, AsyncIterator, Iterable, Protocol, TypedDict, Optional, runtime_checkable
 from datetime import datetime
 
 from .models import ParsedDocument, RawDocument
 from .models_markdown import MarkdownDoc
+from .errors import DomainError
 
 
 # ----------------------------
@@ -193,7 +206,7 @@ class LlmEnrichmentPort(Protocol):
 
 
 class DedupPort(Protocol):
-    """Document-level duplicates detection."""
+    """Document-level duplicates langid."""
 
     def exists(self, content_hash: str) -> bool:
         """Check if a given content hash is already known.
@@ -509,7 +522,7 @@ class AnonymizationPort(Protocol):
             PiiResult: Detected entities with spans and scores.
 
         Raises:
-            AnonymizationError: On detection failures.
+            AnonymizationError: On langid failures.
         """
         ...
 
@@ -636,3 +649,211 @@ class UpsertResult(TypedDict):
     acknowledged: bool
     points_processed: int
 
+
+# ---------------------------------------------
+# English translate ports and error model
+# ---------------------------------------------
+
+
+class LanguageDetectError(DomainError):
+    """Unrecoverable language langid failure.
+
+    Usage:
+        Implementations of LanguageDetectPort must translate vendor/library errors
+        into this domain error. Provide a stable error code and short message.
+    """
+
+    def __init__(self, message: str, details: Optional[dict[str, Any]] = None) -> None:
+        super().__init__("language_detect_error", message, details)
+
+
+class GlossaryError(DomainError):
+    """Glossary rules or I/O failure in term normalization."""
+
+    def __init__(self, message: str, details: Optional[dict[str, Any]] = None) -> None:
+        super().__init__("glossary_error", message, details)
+
+
+class CacheError(DomainError):
+    """Cache store access or consistency failure."""
+
+    def __init__(self, message: str, details: Optional[dict[str, Any]] = None) -> None:
+        super().__init__("cache_error", message, details)
+
+
+class LanguageDetectPort(Protocol):
+    """Determine the primary language of normalized Markdown text.
+
+    Contract:
+        - Deterministic output for identical inputs.
+        - Never raises vendor exceptions; raise LanguageDetectError on failure.
+        - Accepts any length input; upstream may truncate, but the port does not depend on size.
+        - Thread-safe for concurrent calls.
+
+    Concurrency & telemetry:
+        May be called concurrently. The optional ``context`` is for logging only.
+    """
+
+    def detect(
+        self,
+        text: str,
+        hints: Optional[dict[str, Any]] = None,
+        *,
+        context: Optional[dict[str, Any]] = None,
+    ) -> tuple[str, float]:
+        """Detect the primary language of Markdown text.
+
+        Args:
+            text: Full Markdown body (LF newlines). Any length is acceptable.
+            hints: Optional soft hints such as expected languages or prior metadata,
+                e.g., {"candidates": ["sk", "de", "cs"], "path": ".../file.md"}.
+            context: Optional telemetry context (doc_id, run_id, path). Ignored if unused.
+
+        Returns:
+            tuple[str, float]: (lang_code, confidence) where lang_code is lowercase ISO-like code
+            (e.g., "sk", "de", "cs", "pl", "hu", "en") and confidence is a float in [0, 1].
+
+        Raises:
+            LanguageDetectError: On unrecoverable langid failure.
+        """
+        ...
+
+
+class TranslatePort(Protocol):
+    """Produce an English Markdown variant from a source Markdown document.
+
+    Contract:
+        - Preserve Markdown structure; do not translate code blocks, inline code, link URLs, or image paths.
+        - Deterministic and offline; repeatable runs yield byte-identical output given same inputs/options.
+        - Do not mutate the input MarkdownDoc; return a new instance with variant="english" and lang="en".
+        - Respect resource limits (segment size/batching) internally; callers may pass options.
+
+    Capabilities:
+        Implementations must expose a self-description via ``capabilities()`` for logging/validation.
+    """
+
+    def translate_md(
+        self,
+        doc: MarkdownDoc,
+        src_lang: str,
+        tgt_lang: str,
+        options: Optional[dict[str, Any]] = None,
+        *,
+        context: Optional[dict[str, Any]] = None,
+    ) -> MarkdownDoc:
+        """Translate a Markdown document to the target language (project default: English).
+
+        Args:
+            doc: Source MarkdownDoc in its original language (variant="original" by convention). Uses
+                fields text_md, optional lang, and meta for logging.
+            src_lang: Detected/declared source language code (lowercase). Use "auto" if unknown; implementations
+                may re-detect but must report final src_lang in metadata.
+            tgt_lang: Target language code. Fixed to "en" by current scope but kept parameterized.
+            options: Optional translate options, e.g., {"style": "natural"|"literal", "glossary_id": "legal-v1",
+                "max_segment_chars": 1000, "max_parallelism": 4}.
+            context: Optional telemetry context (doc_id, run_id, path). Ignored if unused.
+
+        Returns:
+            MarkdownDoc: New document with:
+                - variant="english"
+                - lang="en"
+                - text_md translated while preserving Markdown structure
+                - meta extended with translate metadata (engine, version, time, segment counts,
+                  cache hits, src/tgt codes, glossary used)
+
+        Raises:
+            TranslationError: When translate fails (engine unavailable, unsupported pair, or internal error).
+        """
+        ...
+
+    def capabilities(self) -> dict[str, Any]:
+        """Return a self-description of the translate engine.
+
+        Returns:
+            dict: JSON-serializable engine fingerprint and constraints, for example:
+                {
+                    "name": "my_offline_mt",
+                    "version": "1.2.3",
+                    "src_langs": ["sk", "de", "cs", "pl", "hu", "en"],
+                    "tgt_langs": ["en"],
+                    "max_batch": 32,
+                    "max_segment_chars": 2000,
+                    "supports_glossary": true,
+                    "supports_cache": true
+                }
+        """
+        ...
+
+
+class GlossaryPort(Protocol):
+    """Apply deterministic term normalization pre/post translate.
+
+    Contract:
+        - Deterministic, order-stable replacements.
+        - Never modifies formatting tokens outside the provided text segment.
+        - Must not raise vendor exceptions; raise GlossaryError on failure.
+    """
+
+    def apply(
+        self,
+        text: str,
+        *,
+        src_lang: str,
+        tgt_lang: str,
+        mode: str,
+        glossary_id: Optional[str],
+        context: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Normalize a plain text segment using glossary rules.
+
+        Args:
+            text: Plain text segment (not full Markdown) to normalize.
+            src_lang: Source language code of the segment.
+            tgt_lang: Target language code (for post-translate this will be "en").
+            mode: "pre" or "post".
+            glossary_id: Identifier of the glossary to use, or None.
+            context: Optional telemetry context. Ignored if unused.
+
+        Returns:
+            str: Normalized text segment.
+
+        Raises:
+            GlossaryError: On rules loading/application failure.
+        """
+        ...
+
+
+class CachePort(Protocol):
+    """Cache translated segments to reduce work and ensure repeatability.
+
+    Contract:
+        - Idempotent and safe under concurrent access.
+        - Crash-safe: partial writes must not be surfaced to callers.
+    """
+
+    def get(self, key: str) -> Optional[str]:
+        """Return a cached value for a deterministic key if present.
+
+        Args:
+            key: Deterministic key (e.g., hash of text + src + tgt + engine + glossary_id + mode).
+
+        Returns:
+            str | None: Cached translate value or None on miss.
+
+        Raises:
+            CacheError: On cache access failure.
+        """
+        ...
+
+    def put(self, key: str, value: str, ttl: Optional[int] = None) -> None:
+        """Store a value under a deterministic key with optional expiration.
+
+        Args:
+            key: Deterministic cache key.
+            value: Value to store.
+            ttl: Optional time-to-live in seconds; implementations may ignore.
+
+        Raises:
+            CacheError: On cache write failure.
+        """
+        ...

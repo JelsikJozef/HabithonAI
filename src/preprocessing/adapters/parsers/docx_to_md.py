@@ -19,7 +19,7 @@ Integration
 
 Notes
 -----
-- No language detection, anonymization, cloud calls, or network I/O are performed here.
+- No language langid, anonymization, cloud calls, or network I/O are performed here.
 - Markdown emits LF newlines and is UTF-8 safe. No invisible control characters.
 - Output is deterministic for identical inputs.
 
@@ -64,7 +64,7 @@ class DocxToMd:
 
     Description:
         Converts Office Open XML Word documents (.docx) into structurally faithful
-        Markdown suitable for downstream normalization, translation, anonymization,
+        Markdown suitable for downstream normalization, translate, anonymization,
         enrichment, and vectorization. The adapter keeps headings, paragraphs,
         ordered/unordered/nested lists, hyperlinks, and simple tables, and records
         metadata counters for tables, images, equations, footnotes, and header/footer
@@ -140,7 +140,7 @@ class DocxToMd:
                   value via shared utilities (documented in the pipeline). This stub does
                   not compute it; implementers must follow project utilities for stability.
                 - path (Path): original source path from raw.path.
-                - lang (str | None): left unset or pass-through; language detection is not
+                - lang (str | None): left unset or pass-through; language langid is not
                   performed here.
                 - text_md (str): UTF-8-safe Markdown string with LF newlines. No trailing
                   whitespace at line ends; paragraphs preserved; structure first.

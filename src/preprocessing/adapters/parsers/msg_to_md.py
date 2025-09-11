@@ -8,7 +8,7 @@ Capability note
   attachments (listed; not inlined).
 - Scope: Single .msg files (not PST). Supports HTML, plain text, and RTF bodies
   (RTF is converted via local logic). Requires no network I/O; everything is offline.
-- Non-goals: No anonymization, translation, or language detection. S/MIME encryption
+- Non-goals: No anonymization, translate, or language langid. S/MIME encryption
   is not decrypted. Active content (scripts/styles) is stripped during HTML sanitation.
 
 Integration
@@ -305,7 +305,7 @@ class MsgToMd:
         else:
             body_md = str(body_sel or "").replace("\r\n", "\n").replace("\r", "\n").strip()
             tables_detected = 0
-            # naive link detection
+            # naive link langid
             links_count = len(re.findall(r"https?://\S+", body_md))
 
         # Attachments (list only)

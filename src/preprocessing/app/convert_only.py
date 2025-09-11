@@ -6,7 +6,7 @@ This module performs conversion-only preprocessing: it discovers input files und
 source directory, selects a Markdown parser adapter via the central registry, converts
 files to Markdown, normalizes the output to UTF-8 with LF line endings, and writes the
 results (and optional sidecar metadata) to a target directory while preserving the
-relative directory structure. It does not perform translation, anonymization, LLM
+relative directory structure. It does not perform translate, anonymization, LLM
 operations, vector storage, or network calls.
 
 Determinism and path mapping

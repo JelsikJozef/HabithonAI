@@ -155,6 +155,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             - normalize_eol (str): One of {lf,keep}.
             - locale (str | None): Locale hint for human-readable logs only.
             - log_file (str | None): Optional path to write logs to a file.
+            - make_english (bool): When set, run translate(EN) for Markdown outputs.
 
     Raises:
         SystemExit: When -h/--help is requested. For invalid combinations, prefer
@@ -170,7 +171,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         prog="mdify",
         description=(
             "Convert files in a folder to Markdown, preserving structure and assets. "
-            "Deterministic, batch-friendly, and convert-only."
+            "Deterministic, batch-friendly, and convert-only. Optionally, create an English variant."
         ),
         add_help=True,
     )
@@ -228,6 +229,44 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="skip: log and continue; fail: stop immediately and return non-zero",
     )
     perf.add_argument("--dry-run", action="store_true", help="Discover and plan outputs but do not write files")
+
+    # Translation flags (additive; only used when --make-english)
+    tr = parser.add_argument_group("Translation (English variant)")
+    tr.add_argument("--make-english", action="store_true", help="Create/refresh English Markdown variants (offline)")
+    tr.add_argument(
+        "--translator",
+        choices=("ct2_nllb", "marian_opus"),
+        default=None,
+        help="Translation engine to use (overrides settings_translation.engine)",
+    )
+    tr.add_argument("--tgt-lang", default="en", help="Target language code (default: en)")
+    tr.add_argument("--lang-detect", default="fast", help="Language detection engine hint (symbolic)")
+    tr.add_argument(
+        "--lang-candidates",
+        default=None,
+        help="Comma-separated language hints (e.g., sk,de,cs,pl,hu,en) for the detector",
+    )
+    tr.add_argument("--segment-max-chars", type=int, default=None, help="Soft limit for per-segment size")
+    tr.add_argument("--translate-link-label", choices=("true", "false"), default=None)
+    tr.add_argument("--translate-alt-text", choices=("true", "false"), default=None)
+    tr.add_argument("--translate-table-cells", choices=("true", "false"), default=None)
+    tr.add_argument("--collapse-softbreaks", choices=("true", "false"), default=None)
+    tr.add_argument("--glossary-id", default=None, help="Glossary identifier to use (if enabled in settings)")
+    tr.add_argument(
+        "--glossary-mode",
+        choices=("pre", "post", "both", "none"),
+        default=None,
+        help="Override glossary mode for this run",
+    )
+    tr.add_argument("--mt-cache", dest="mt_cache", default=None, help="Override translation cache root path")
+    tr.add_argument("--cache-disabled", action="store_true", help="Disable translation cache during this run")
+    tr.add_argument(
+        "--translate-on-error",
+        choices=("skip", "fail_fast"),
+        default="skip",
+        help="Translation error policy: skip to continue; fail_fast to abort on first error",
+    )
+    tr.add_argument("--translate-only", action="store_true", help="Skip convert phase and translate Markdown under --src")
 
     diag = parser.add_argument_group("Logging & diagnostics")
     diag.add_argument(
@@ -639,6 +678,458 @@ def _summarize(collected: List[Mapping[str, Any]], extra: Mapping[str, Any]) -> 
     return sum_map
 
 
+# ----- Translation wiring (lazy) -----
+
+def _bool_from_flag(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    if s in {"true", "1", "yes", "y", "on"}:
+        return True
+    if s in {"false", "0", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _load_md_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        # Fallback with universal newlines
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+
+def _enumerate_md_originals_from_convert(results: List[Mapping[str, Any]], out_root: Path) -> List[Path]:
+    md_paths: List[Path] = []
+    for rec in results:
+        st = str(rec.get("status", "")).upper()
+        if st not in {"OK", "SKIP"}:
+            continue
+        dst = rec.get("dst")
+        if not dst:
+            continue
+        p = Path(str(dst)).resolve()
+        # Ensure under out_root when possible; still include if path exists
+        if p.exists():
+            md_paths.append(p)
+    # Deterministic order
+    md_paths.sort(key=lambda x: str(x))
+    return md_paths
+
+
+def _enumerate_md_originals_from_dir(src_dir: Path) -> List[Path]:
+    md_paths: List[Path] = []
+    for dp, _dns, fns in __import__("os").walk(src_dir):
+        d = Path(dp)
+        for name in fns:
+            if name.lower().endswith(".md"):
+                md_paths.append((d / name).resolve())
+    md_paths.sort(key=lambda x: str(x))
+    return md_paths
+
+
+def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert_code: int, convert_results: List[Mapping[str, Any]]) -> Tuple[int, Optional[dict]]:
+    """Run translate(EN) flow if requested; returns (exit_code_override, report_section).
+
+    exit_code_override: 0/1/3 to override main code, or -1 to keep convert_code.
+    report_section: Optional JSON-serializable section to merge into main report under key "translation".
+    """
+    if not getattr(ns, "make_english", False):
+        return -1, None
+
+    # Lazy imports to avoid heavy startup
+    try:
+        from ..app.ensure_english import ensure_english_for_batch  # type: ignore
+        from ..domain.models_markdown import MarkdownDoc  # type: ignore
+        from ..domain.errors import WriteError, TranslationError  # type: ignore
+        from ..domain.ports import WriterContext  # type: ignore
+        from .. import settings_translation as st  # type: ignore
+    except Exception as e:
+        logging.error("Translation components unavailable: %s", e)
+        return 3, {"error": f"Translation components unavailable: {e}"}
+
+    # Start from settings and apply CLI overrides (pure data)
+    settings = dict(st.TRANSLATION)
+    engine_cli = getattr(ns, "translator", None)
+    if engine_cli:
+        settings["engine"] = str(engine_cli)
+    tgt_lang = (getattr(ns, "tgt_lang", "en") or "en").lower()
+    if tgt_lang != "en":
+        logging.warning("Non-default tgt_lang requested: %s (project default is 'en')", tgt_lang)
+    # Segmenter overrides
+    seg = dict(settings.get("segmenter", {}))
+    if ns.segment_max_chars is not None:
+        seg["segment_max_chars"] = int(ns.segment_max_chars)
+    for flag, key in [
+        (ns.translate_link_label, "translate_link_label"),
+        (ns.translate_alt_text, "translate_alt_text"),
+        (ns.translate_table_cells, "translate_table_cells"),
+        (ns.collapse_softbreaks, "collapse_softbreaks"),
+    ]:
+        b = _bool_from_flag(flag)
+        if b is not None:
+            seg[key] = bool(b)
+    settings["segmenter"] = seg
+    # Langid overrides
+    langid_cfg = dict(settings.get("langid", {}))
+    cand = getattr(ns, "lang_candidates", None)
+    if cand:
+        langid_cfg["candidates"] = [s.strip().lower() for s in str(cand).split(",") if s.strip()]
+    settings["langid"] = langid_cfg
+    # Glossary
+    gls = dict(settings.get("glossary", {}))
+    if ns.glossary_id is not None:
+        gls["glossary_id"] = ns.glossary_id
+        gls["enabled"] = True if ns.glossary_id else gls.get("enabled", False)
+    if ns.glossary_mode is not None:
+        gls["mode"] = ns.glossary_mode
+    settings["glossary"] = gls
+    # Cache
+    cache = dict(settings.get("cache", {}))
+    if getattr(ns, "mt_cache", None):
+        cache["root_path"] = ns.mt_cache
+    if getattr(ns, "cache_disabled", False):
+        cache["enabled"] = False
+    settings["cache"] = cache
+    # IO for translation
+    io_cfg = dict(settings.get("io", {}))
+    io_cfg["workers"] = int(getattr(ns, "workers", io_cfg.get("workers", 1)))
+    io_cfg["dry_run"] = bool(getattr(ns, "dry_run", io_cfg.get("dry_run", False)))
+    io_cfg["overwrite"] = bool(getattr(ns, "overwrite", io_cfg.get("overwrite", False)))
+    io_cfg["on_error"] = str(getattr(ns, "translate_on_error", io_cfg.get("on_error", "skip")))
+    settings["io"] = io_cfg
+
+    # Validate settings early
+    ok, issues = st.validate_translation_settings(settings)
+    if not ok:
+        for msg in issues:
+            logging.error("Config: %s", msg)
+        logging.error("Translation settings invalid; aborting")
+        return 2, {"errors": issues}
+
+    logging.info("Translate capabilities: %s", st.capabilities_summary(settings))
+
+    # Build real adapters (langid, translator, optional glossary/cache) according to settings
+    try:
+        # LangID: fastText
+        from ..adapters.langid.fasttext_langid import FastTextLangId  # type: ignore
+        from ..domain.ports import LanguageDetectError as _LangDetectErr  # type: ignore
+        langid_cfg = dict(settings.get("langid", {}))
+        _ft = FastTextLangId(
+            str(langid_cfg.get("model_path")),
+            max_chars=int(langid_cfg.get("max_chars", 5000) or 5000),
+            min_chars=int(langid_cfg.get("min_chars", 50) or 50),
+            candidates=list(langid_cfg.get("candidates", []) or []),
+        )
+
+        # Lightweight heuristic fallback to avoid hard-fail on FT runtime errors
+        class _HeuristicLangId:
+            def detect(self, text: str, hints: Optional[dict[str, Any]] = None, *, context: Optional[dict[str, Any]] = None) -> Tuple[str, float]:  # type: ignore[override]
+                s = (text or "")[: max(0, int(settings.get("langid", {}).get("max_chars", 5000)))]
+                s = s.lower()
+                if any(tok in s for tok in [" der ", " die ", " und ", " ist ", " nicht "]):
+                    return "de", 0.80
+                if any(tok in s for tok in [" a je ", " že ", " nie ", " pre ", " ktoré "]):
+                    return "sk", 0.75
+                if any(tok in s for tok in [" a je ", " že ", " není ", " pro ", " které "]):
+                    return "cs", 0.70
+                if any(tok in s for tok in [" oraz ", " nie ", " jest ", " ale "]):
+                    return "pl", 0.70
+                if any(tok in s for tok in [" és ", " nem ", " van ", " hogy "]):
+                    return "hu", 0.70
+                if any(tok in s for tok in [" the ", " and ", " is ", " not ", " for "]):
+                    return "en", 0.85
+                return "en", 0.50
+
+        class _FallbackLangId:
+            def __init__(self, primary: Any, fallback: Any) -> None:
+                self._p = primary
+                self._f = fallback
+            def detect(self, text: str, hints: Optional[dict[str, Any]] = None, *, context: Optional[dict[str, Any]] = None) -> Tuple[str, float]:  # type: ignore[override]
+                try:
+                    return self._p.detect(text, hints, context=context)
+                except _LangDetectErr:
+                    return self._f.detect(text, hints, context=context)
+            def capabilities(self) -> dict:
+                return {"name": "ft-with-heuristic-fallback", "deterministic": True}
+
+        langid = _FallbackLangId(_ft, _HeuristicLangId())
+
+        # Optional cache
+        cache = None
+        cache_cfg = dict(settings.get("cache", {}))
+        if bool(cache_cfg.get("enabled", False)):
+            from ..adapters.cache.disk_cache import DiskCache  # type: ignore
+            root_path = str(cache_cfg.get("root_path"))
+            # Ensure parent directory exists
+            try:
+                from pathlib import Path as _P
+                _P(root_path).parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            cache = DiskCache(
+                root_path,
+                mode=str(cache_cfg.get("backend", "sqlite") or "sqlite"),
+                max_value_bytes=int(cache_cfg.get("max_value_bytes", 1000000) or 1000000),
+                max_items=cache_cfg.get("max_items"),
+                default_ttl_seconds=cache_cfg.get("default_ttl_seconds"),
+                namespace=str(cache_cfg.get("namespace", "")) or None,
+            )
+            try:
+                cache.open()
+            except Exception as e:
+                logging.warning("MT cache unavailable (%s); continuing without cache", e)
+                cache = None
+
+        # Optional glossary
+        glossary = None
+        gl_cfg = dict(settings.get("glossary", {}))
+        if bool(gl_cfg.get("enabled", False)):
+            from ..adapters.glossary.sqlite_glossary import SqliteGlossary  # type: ignore
+            glossary = SqliteGlossary(
+                db_path=str(gl_cfg.get("db_path")),
+                default_glossary_id=gl_cfg.get("glossary_id"),
+                regex_enabled=bool(gl_cfg.get("regex_enabled", False)),
+            )
+            try:
+                glossary.load(gl_cfg.get("glossary_id"))
+            except Exception as e:
+                logging.warning("Glossary unavailable (%s); continuing without glossary", e)
+                glossary = None
+
+        # Translator engine
+        engine = (engine_cli or settings.get("engine") or "marian_opus").strip()
+        seg_opts = dict(settings.get("segmenter", {}))
+        dec = dict(settings.get("decoding", {}))
+        if engine == "marian_opus":
+            from ..adapters.translate.marian_opus import MarianOpus  # type: ignore
+            mar = dict(settings.get("marian", {}))
+            dec_m = dict(dec.get("marian", {}))
+            translator = MarianOpus(
+                models=dict(mar.get("models", {})),
+                device=str(mar.get("device", "cpu")),
+                dtype=str(mar.get("dtype", "auto")),
+                num_beams=int(dec_m.get("num_beams", 4) or 4),
+                length_penalty=float(dec_m.get("length_penalty", 1.0) or 1.0),
+                max_batch_size=int(dec_m.get("max_batch_size", 16) or 16),
+                max_new_tokens=int(dec_m.get("max_new_tokens", 256) or 256),
+                no_repeat_ngram_size=dec_m.get("no_repeat_ngram_size"),
+                segmenter_options=seg_opts,
+                glossary_mode=str(gl_cfg.get("mode", "none")),
+                cache_enabled=bool(cache_cfg.get("enabled", False)),
+                seed=dec_m.get("seed"),
+                local_files_only=bool(mar.get("local_files_only", True)),
+                hf_cache_dir=mar.get("hf_cache_dir"),
+                glossary=glossary,
+                cache=cache,
+            )
+        elif engine == "ct2_nllb":
+            from ..adapters.translate.ct2_nllb import NllbCTranslate2  # type: ignore
+            ct2 = dict(settings.get("ct2_nllb", {}))
+            dec_c = dict(dec.get("ct2", {}))
+            translator = NllbCTranslate2(
+                model_dir=str(ct2.get("model_dir")),
+                src_lang_map=dict(ct2.get("src_lang_map", {})),
+                tgt_lang_code=str(ct2.get("tgt_lang_code", "eng_Latn")),
+                compute_type=str(ct2.get("compute_type", "int8")),
+                device=str(ct2.get("device", "cpu")),
+                num_threads=int(ct2.get("num_threads", 1) or 1),
+                beam_size=int(dec_c.get("beam_size", 4) or 4),
+                length_penalty=float(dec_c.get("length_penalty", 1.0) or 1.0),
+                max_batch_size=int(dec_c.get("max_batch_size", 8) or 8),
+                max_tokens=int(dec_c.get("max_tokens", 256) or 256),
+                segmenter_options=seg_opts,
+                glossary_mode=str(gl_cfg.get("mode", "none")),
+                cache_enabled=bool(cache_cfg.get("enabled", False)),
+                seed=dec_c.get("seed"),
+                glossary=glossary,
+                cache=cache,
+            )
+            # Eager-load to validate model dir early
+            try:
+                translator.load()  # type: ignore[attr-defined]
+            except Exception as e:
+                logging.error("CT2/NLLB load failed: %s", e)
+                return 3, {"error": f"CT2/NLLB load failed: {e}"}
+        else:
+            logging.error("Unknown translator engine: %s", engine)
+            return 2, {"error": f"Unknown translator engine: {engine}"}
+
+    except Exception as e:
+        logging.error("Translation components unavailable: %s", e)
+        return 3, {"error": f"Translation components unavailable: {e}"}
+
+    # Prepare writer context
+    class _SimpleWriterCtx:
+        def __init__(self, *, out_root: Path, src_root: Path, assets_subdir: str, write_meta: str, overwrite: bool, dry_run: bool) -> None:
+            self.out_root = str(out_root)
+            self.src_root = str(src_root)
+            self.assets_subdir = str(assets_subdir)
+            self.assets_layout = "per_doc"
+            self.write_meta = str(write_meta)
+            self.overwrite = bool(overwrite)
+            self.dry_run = bool(dry_run)
+            self.ensure_final_newline = True
+
+    class _SimpleWriter:
+        def compute_paths(self, doc: Any, ctx: WriterContext) -> Dict[str, Optional[str]]:  # type: ignore[override]
+            in_path = Path(getattr(doc, "path"))
+            src_root = Path(ctx.src_root)
+            out_root = Path(ctx.out_root)
+            # English variants go under out_root/en/<rel>
+            try:
+                rel = in_path.resolve().relative_to(src_root.resolve())
+            except Exception:
+                # Fallback: treat as flat under out_root/en
+                rel = Path(in_path.name)
+            en_root = out_root / "en"
+            out_md_path = (en_root / rel).with_suffix(".md")
+            assets_dir = out_md_path.parent / ctx.assets_subdir
+            sidecar_path = out_md_path.with_suffix(out_md_path.suffix + ".meta.json") if ctx.write_meta == "sidecar" else None
+            return {
+                "out_md_path": str(out_md_path.resolve()),
+                "assets_dir": str(assets_dir.resolve()),
+                "sidecar_meta_path": str(sidecar_path) if sidecar_path else None,
+            }
+
+        def write(self, doc: Any, ctx: WriterContext) -> Dict[str, Any]:  # type: ignore[override]
+            paths = self.compute_paths(doc, ctx)
+            out_md = Path(paths["out_md_path"])  # type: ignore[index]
+            out_md.parent.mkdir(parents=True, exist_ok=True)
+            status = "dry_run" if ctx.dry_run else "ok"
+            bytes_written = None
+            if not ctx.dry_run:
+                text = getattr(doc, "text_md")
+                # Always LF
+                text_lf = str(text).replace("\r\n", "\n").replace("\r", "\n")
+                if ctx.write_meta == "inline":
+                    meta = getattr(doc, "meta", {}) or {}
+                    header = f"<!-- meta: {json.dumps(meta, sort_keys=True, ensure_ascii=False)} -->\n"
+                    text_lf = header + text_lf
+                out_md.write_text(text_lf, encoding="utf-8", newline="\n")
+                bytes_written = len(text_lf.encode("utf-8"))
+                if ctx.write_meta == "sidecar":
+                    sidecar = Path(paths["sidecar_meta_path"])  # type: ignore[index]
+                    sidecar.parent.mkdir(parents=True, exist_ok=True)
+                    meta = getattr(doc, "meta", {}) or {}
+                    sidecar.write_text(json.dumps(meta, ensure_ascii=False, sort_keys=True), encoding="utf-8", newline="\n")
+            return {
+                "status": status,
+                "out_md_path": str(out_md),
+                "assets_dir": str(Path(paths["assets_dir"])) if paths.get("assets_dir") else None,
+                "assets_written": 0,
+                "bytes_written_md": bytes_written,
+                "bytes_written_assets": 0,
+                "sidecar_written": ctx.write_meta == "sidecar" and not ctx.dry_run,
+                "renamed_assets": [],
+                "warnings": [],
+                "error": None,
+            }
+
+    writer_ctx = _SimpleWriterCtx(
+        out_root=cfg.out,
+        src_root=cfg.out if not ns.translate_only else cfg.src,  # type: ignore[arg-type]
+        assets_subdir=cfg.assets_subdir,
+        write_meta=cfg.write_meta,
+        overwrite=cfg.overwrite,
+        dry_run=cfg.dry_run,
+    )
+
+    # Determine original Markdown inputs
+    if getattr(ns, "translate_only", False):
+        md_inputs = _enumerate_md_originals_from_dir(cfg.src)
+        if not md_inputs:
+            logging.error("--translate-only: no .md files found under %s", str(cfg.src))
+    else:
+        md_inputs = _enumerate_md_originals_from_convert(convert_results, cfg.out)
+        # Fallback: if none were converted and src has .md files, treat as translate-only
+        if not md_inputs:
+            guess = _enumerate_md_originals_from_dir(cfg.src)
+            if guess:
+                logging.info("No converted outputs detected; switching to translate-only mode over Markdown under --src")
+                md_inputs = guess
+
+    # Build MarkdownDoc list
+    docs = []
+    for p in md_inputs:
+        try:
+            text_md = _load_md_text(p)
+        except Exception as e:
+            logging.warning("Unable to read Markdown: %s (%s)", str(p), e)
+            continue
+        # Stable doc_id: path relative to src_root (or out root) with POSIX separators
+        try:
+            rel = p.resolve().relative_to(Path(writer_ctx.src_root).resolve()).as_posix()
+        except Exception:
+            rel = p.name
+        doc_id = f"md::{rel}"
+        docs.append(MarkdownDoc(doc_id=doc_id, path=str(p), variant="original", lang=None, text_md=text_md, meta={}))
+
+    # Ports bundle expected by ensure_english
+    class _Ports:
+        def __init__(self) -> None:
+            self.langid = langid
+            self.translate = translator
+            self.writer = _SimpleWriter()
+            self.glossary = glossary
+            self.cache = cache
+            self.writer_ctx = writer_ctx
+
+    ports = _Ports()
+
+    # Build cfg for batch ensure
+    en_cfg: Dict[str, Any] = {
+        "tgt_lang": tgt_lang,
+        "style": "natural",
+        "glossary_id": ns.glossary_id,
+        "max_segment_chars": seg.get("segment_max_chars"),
+        "strict": bool(settings.get("strict", True)),
+        "overwrite": bool(io_cfg.get("overwrite", False)),
+        "dry_run": bool(io_cfg.get("dry_run", False)),
+        "copy_when_already_en": True,
+        "en_confidence_threshold": 0.95,
+        "workers": int(io_cfg.get("workers", 1)),
+        "on_error": str(io_cfg.get("on_error", "skip")),
+        "writer_ctx": writer_ctx,
+    }
+
+    logging.info("Translate starting | docs=%d on_error=%s workers=%d", len(docs), en_cfg["on_error"], en_cfg["workers"])
+
+    batch = ensure_english_for_batch(docs, ports, en_cfg, context={"run_id": datetime.now(timezone.utc).isoformat()})
+
+    # Render translation summary
+    logging.info(
+        "EN Summary | total=%s created=%s skipped_exists=%s skipped_already_en=%s failed=%s wall=%.2fs",
+        batch.get("total"),
+        batch.get("created"),
+        batch.get("skipped_exists"),
+        batch.get("skipped_already_en"),
+        batch.get("failed"),
+        float((batch.get("wall_millis") or 0.0)) / 1000.0,
+    )
+
+    # Determine exit code override
+    exit_override = -1
+    if en_cfg["on_error"] == "fail_fast" and int(batch.get("failed", 0)) > 0:
+        exit_override = 3
+    elif int(batch.get("failed", 0)) > 0 and convert_code == 0:
+        # Propagate non-fatal translation failures as code 1 when convert-only succeeded
+        exit_override = 1
+
+    report_section = {
+        "engine_fingerprint": batch.get("engines", {}),
+        "docs_total": batch.get("total", 0),
+        "created": batch.get("created", 0),
+        "skipped_exists": batch.get("skipped_exists", 0),
+        "skipped_already_en": batch.get("skipped_already_en", 0),
+        "failed": batch.get("failed", 0),
+        "results": batch.get("results", []),
+    }
+
+    return exit_override, report_section
+
+
 # ----- Public entry point -----
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -701,26 +1192,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if progress_mode == "auto":
         progress_mode = "plain" if _is_tty() else "plain"  # degrade to plain in this implementation
 
-    try:
-        code, results, summary = _call_app_convert(cfg)
-    except Exception as e:
-        logging.error("Fatal initialization error: %s", e)
-        return 3
+    # If translate-only requested, skip convert and enumerate .md under --src
+    convert_code = 0
+    results: List[Mapping[str, Any]] = []
+    summary: Mapping[str, Any] = {"matched": 0, "scanned": 0, "duration_sec": 0.0}
+    if getattr(ns, "translate_only", False):
+        logging.info("Translate-only mode: skipping convert phase")
+    else:
+        try:
+            convert_code, results, summary = _call_app_convert(cfg)
+        except Exception as e:
+            logging.error("Fatal initialization error: %s", e)
+            return 3
 
-    # Per-file results rendering
-    results = _render_progress(results, mode=progress_mode)
+        # Per-file results rendering
+        results = _render_progress(results, mode=progress_mode)
 
-    # Summary
-    final_summary = _summarize(results, summary)
-    logging.info(
-        "Summary | scanned=%s matched=%s converted=%s skipped=%s failed=%s duration=%.2fs",
-        final_summary.get("scanned"),
-        final_summary.get("matched"),
-        final_summary.get("converted"),
-        final_summary.get("skipped"),
-        final_summary.get("failed"),
-        float(final_summary.get("duration_sec") or 0.0),
-    )
+        # Summary
+        final_summary = _summarize(results, summary)
+        logging.info(
+            "Summary | scanned=%s matched=%s converted=%s skipped=%s failed=%s duration=%.2fs",
+            final_summary.get("scanned"),
+            final_summary.get("matched"),
+            final_summary.get("converted"),
+            final_summary.get("skipped"),
+            final_summary.get("failed"),
+            float(final_summary.get("duration_sec") or 0.0),
+        )
+
+    # Optional translation phase
+    exit_override, translation_section = _run_translation_phase(ns, cfg, convert_code, results)
 
     # Optional JSON run report
     if cfg.report:
@@ -729,8 +1230,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "started": datetime.now(timezone.utc).isoformat(),
                 "config": cfg.as_app_config(),
                 "results": list(results),
-                "summary": dict(final_summary),
+                "summary": dict(_summarize(results, summary)),
             }
+            if translation_section is not None:
+                payload["translation"] = translation_section
             with cfg.report.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
             logging.debug("Wrote report to %s", str(cfg.report))
@@ -741,11 +1244,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return 1
             logging.warning("Failed to write report: %s", e)
 
+    # Decide final exit code
+    if exit_override in (0, 1, 2, 3):
+        return int(exit_override)
     # Map app-layer suggested code to spec exit codes (prefer more severe)
-    if code not in (0, 1):
+    if convert_code not in (0, 1):
         # Treat any unexpected code as fatal init error
         return 3
-    return code
+    return convert_code
 
 
 if __name__ == "__main__":

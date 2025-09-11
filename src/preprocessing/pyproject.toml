@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "habithon-preprocessing"
-version = "0.2.1"
-description = "Convert-only folder→Markdown tool with the mdify CLI (batch DOCX/XLSX/PDF/MSG to .md; no LLM/OCR pipeline)."
+version = "0.3.1"
+description = "Folder→Markdown converter with optional offline English translation (ct2_nllb / marian_opus) via the mdify CLI."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
@@ -15,14 +15,18 @@ license = { text = "MIT" }
 keywords = [
   "markdown",
   "converter",
+  "translation",
+  "offline",
   "docx",
   "pdf",
   "xlsx",
   "msg",
+  "ct2",
+  "marian",
+  "fasttext",
   "batch",
   "cli",
-  "mdify",
-  "convert-only"
+  "mdify"
 ]
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -32,45 +36,77 @@ classifiers = [
   "Intended Audience :: Developers",
   "Topic :: Text Processing :: Markup",
 ]
-# Core package has no hard runtime deps; parser backends are optional extras.
+# Core package remains import-light; engines and parsers are optional extras.
 dependencies = []
 
 [project.optional-dependencies]
+# Document parsers used by the convert phase
 parsers = [
   "pdfminer.six>=20221105",
   "python-docx>=0.8.11",
   "extract_msg>=0.48.5",
 ]
-# Back-compat umbrella; currently same as 'parsers'
+# Language identification (fastText bindings)
+langid = [
+  "fasttext>=0.9.2",
+]
+# CTranslate2 + SentencePiece (NLLB) for ct2_nllb engine
+ct2 = [
+  "ctranslate2>=3.9.0",
+  "sentencepiece>=0.1.99",
+]
+# Marian via Transformers (CPU by default) for marian_opus engine
+marian = [
+  "transformers>=4.38.0",
+  "torch>=2.1.0",
+  "sentencepiece>=0.1.99",
+  "sacremoses>=0.0.53",
+  "huggingface-hub>=0.21.0",
+]
+# Convenience umbrella
 all = [
+  # parsers
   "pdfminer.six>=20221105",
   "python-docx>=0.8.11",
   "extract_msg>=0.48.5",
+  # langid
+  "fasttext>=0.9.2",
+  # ct2
+  "ctranslate2>=3.9.0",
+  "sentencepiece>=0.1.99",
+  # marian
+  "transformers>=4.38.0",
+  "torch>=2.1.0",
+  "sentencepiece>=0.1.99",
+  "sacremoses>=0.0.53",
+  "huggingface-hub>=0.21.0",
 ]
 
 [project.scripts]
-# New primary entry
+# Primary entry
 mdify = "preprocessing.presentation.cli:main"
 # Legacy entry for backward compatibility
 preprocessing = "preprocessing.presentation.cli:main"
+# Helper to pre-download NMT models into a local HF cache
+mt-download = "scripts.download_models:main"
 
 # Explicit setuptools configuration to avoid accidental discovery of sibling packages
 [tool.setuptools]
 include-package-data = true
 
-# Discover from parent (src) and include only preprocessing*
+# Discover from parent (src) and include preprocessing* and scripts*
 [tool.setuptools.packages.find]
 where = [".."]
-include = ["preprocessing*"]
+include = ["preprocessing*", "scripts*"]
 exclude = ["tests*"]
 
 # Map the source root for discovery
 [tool.setuptools.package-dir]
 "" = ".."
 
-# Hatch configuration remains for wheel builds
+# Hatch configuration for wheel builds
 [tool.hatch.build.targets.wheel]
-packages = ["preprocessing"]
+packages = ["preprocessing", "scripts"]
 
 [tool.hatch.version]
 path = "preprocessing/__init__.py"

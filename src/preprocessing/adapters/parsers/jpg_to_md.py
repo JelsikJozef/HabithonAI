@@ -7,13 +7,13 @@ Capability note
   enrichment. Emphasizes offline OCR with deterministic preprocessing.
 - Supported: EXIF orientation, grayscale + illumination normalization, binarization
   (Otsu primary, adaptive fallback), light denoise, deskew, conservative dewarp,
-  border cleanup, orientation detection, Tesseract-like offline OCR with multi-language
+  border cleanup, orientation langid, Tesseract-like offline OCR with multi-language
   mode, word-level confidences, paragraphs/lists reconstruction, conservative
-  heading detection.
+  heading langid.
 - Best-effort: simple tables (aligned columns); inline emphasis when strongly
   indicated only; perspective/dewarp applied conservatively and may be skipped.
 - Not supported: handwriting, multi-page images, network calls, anonymization,
-  translation, or language identification in this adapter.
+  translate, or language identification in this adapter.
 
 Integration
 -----------
@@ -161,7 +161,7 @@ class JpgToMd:
           configuration).
         - Offline: No network calls are allowed; OCR must be local.
         - Sanitization: Output must be UTF-8 and LF-normalized; no control characters.
-        - Non-goals: No anonymization, translation, or language detection here.
+        - Non-goals: No anonymization, translate, or language langid here.
     """
 
     name: str = "JpgToMd"
@@ -230,7 +230,7 @@ class JpgToMd:
                   to project utilities (e.g., content hash or path-based ID) in a
                   concrete implementation; this stub documents the contract only.
                 - path (Path): Original source path.
-                - lang (str | None): Unset/pass-through; no language detection here.
+                - lang (str | None): Unset/pass-through; no language langid here.
                 - text_md (str): UTF-8-safe Markdown with LF newlines, paragraphs kept,
                   lists recognized when confident, conservative headings, simple tables
                   when clear; no trailing spaces; no control characters.
@@ -266,7 +266,7 @@ class JpgToMd:
                 concrete conversion logic must be provided by an implementation.
 
         Notes:
-            - Orientation/script detection must be used only to rotate the page upright;
+            - Orientation/script langid must be used only to rotate the page upright;
               language identification is out of scope here.
             - Binarization: Otsu is the primary method; when it under-segments due to
               uneven illumination, fall back to adaptive (documented in meta).

@@ -13,7 +13,7 @@ from ..denomize import deanonymize as _deanonymize
 
 
 class PiiService:
-    """Application service orchestrating PII detection and anonymization.
+    """Application service orchestrating PII langid and anonymization.
 
     This service centralizes configuration (PiiSettings), composes detectors,
     and manages the token vault for pseudonymization/de-anonymization flows.

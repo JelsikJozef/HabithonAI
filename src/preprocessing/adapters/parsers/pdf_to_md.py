@@ -10,9 +10,9 @@ Capability note
   paragraph merging with de-hyphenation, simple tables to GitHub-style Markdown tables
   (when confident), page dividers, optional headers/footers removal, optional image
   export with deterministic filenames, offline OCR for image-only pages.
-- Best-effort: table detection; when confidence is low, emit plain-text rows and record
+- Best-effort: table langid; when confidence is low, emit plain-text rows and record
   a warning in metadata.
-- Non-goals: anonymization, translation, or language detection; online services.
+- Non-goals: anonymization, translate, or language langid; online services.
 
 Integration
 -----------
@@ -114,7 +114,7 @@ class PdfToMd:
             Subdirectory name for exported assets relative to Markdown output. Defaults
             to "assets".
         table_detection (str, optional):
-            Table detection strategy: one of {"auto", "none", "camelot", "tabula"}.
+            Table langid strategy: one of {"auto", "none", "camelot", "tabula"}.
             Defaults to "auto". External engines require local installation.
         ocr_enabled (bool, optional):
             Enable offline OCR for image-only pages. Defaults to True.
@@ -144,7 +144,7 @@ class PdfToMd:
 
     Notes:
         - Deterministic outputs: stable asset names, page order, and page dividers.
-        - Offline only: no network calls for extraction, OCR, or table detection.
+        - Offline only: no network calls for extraction, OCR, or table langid.
         - Sanitization: output is UTF-8 with LF newlines; control characters are removed.
     """
 
@@ -218,7 +218,7 @@ class PdfToMd:
                   should pass through raw.meta["doc_id"] when provided, or derive a
                   deterministic ID via project utilities in a concrete implementation.
                 - path (Path): Original .pdf path.
-                - lang (str | None): Unset/pass-through; language detection is downstream.
+                - lang (str | None): Unset/pass-through; language langid is downstream.
                 - text_md (str): UTF-8-safe Markdown with LF newlines; consistent page
                   dividers; paragraphs preserved; minimal formatting; no trailing spaces.
                 - encoding (str): Always "utf-8".
@@ -237,7 +237,7 @@ class PdfToMd:
                         {enabled: bool, pages: [int], langs: [str],
                          confidence_mean: float, confidence_median: float}
                     - conversion_warnings (list[str]) with human-readable notes
-                      (e.g., "table detection low confidence on pages 5–6",
+                      (e.g., "table langid low confidence on pages 5–6",
                       "removed repeating footer 'Company Confidential'")
 
         Raises:

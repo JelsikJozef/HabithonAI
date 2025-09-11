@@ -205,7 +205,7 @@ class ParserRegistry:
         mime : str | None, optional
             Caller-provided MIME when available (e.g., from HTTP upload headers).
         content_sniff : bool, optional
-            If True and libmagic is available, attempt content-based MIME detection when
+            If True and libmagic is available, attempt content-based MIME langid when
             extension/MIME are inconclusive. Defaults to False.
 
         Returns

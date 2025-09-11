@@ -5,7 +5,7 @@ import os
 
 @dataclass
 class PiiSettings:
-    """Central configuration for PII detection/anonymization.
+    """Central configuration for PII langid/anonymization.
 
     This dataclass holds all configurable parameters for the anonymization
     pipeline so they can be controlled from one place (and via environment).

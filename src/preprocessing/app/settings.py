@@ -11,7 +11,7 @@ Design goals
 - Immutable: Settings is a frozen dataclass; callers must rebuild for changes.
 - Explicit: Invalid configuration raises SettingsError with actionable messages.
 - Forward-compatible: Fields cover convert-only flow today and future pipeline
-  (translation, privacy/anonymization toggles, vector store) without importing
+  (translate, privacy/anonymization toggles, vector store) without importing
   heavy vendor dependencies.
 
 Environment variables
@@ -409,7 +409,7 @@ class Settings:
         pdf_page_divider: Divider inserted between pages in combined text.
         pdf_export_images: Export images from PDFs.
         pdf_assets_subdir: Subdir for PDF extracted assets.
-        pdf_table_detection: Table detection engine: "auto", "none", "camelot", or "tabula".
+        pdf_table_detection: Table langid engine: "auto", "none", "camelot", or "tabula".
 
         ocr_enabled: Enable OCR for image-only content.
         ocr_langs: Tuple of language codes for OCR engine.
@@ -424,7 +424,7 @@ class Settings:
         msg_quoted_reply_mode: Handling of quoted replies in emails.
 
         translator: Forward-compatible translator backend name.
-        mt_model_id: Forward-compatible machine translation model id.
+        mt_model_id: Forward-compatible machine translate model id.
         mt_device: Forward-compatible device string (e.g., "cpu", "cuda:0").
         mt_max_tokens: Forward-compatible MT token cap.
         mt_batch_size: Forward-compatible MT batch size.
@@ -638,7 +638,7 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
         "msg_export_assets": True,
         "msg_assets_subdir": "msg_assets",
         "msg_quoted_reply_mode": "blockquote",
-        # translation
+        # translate
         "translator": None,
         "mt_model_id": None,
         "mt_device": None,

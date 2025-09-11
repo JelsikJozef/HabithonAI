@@ -25,7 +25,7 @@ class Settings:
     openai_model: str = "gpt-4o-mini"
     openai_max_tokens: int = 512
     anonymization_include_text: bool = False
-    # Language detection configuration
+    # Language langid configuration
     language_model_path: Optional[str] = None
     language_min_confidence: float = 0.3
     # Presidio configuration (adapter layer will propagate to anonymization)
@@ -76,7 +76,7 @@ class Settings:
         except Exception:
             max_tokens = 512
         include_text = cls._to_bool(os.environ.get("ANON_INCLUDE_TEXT"), default=False)
-        # Language detection config
+        # Language langid config
         lang_model_path = os.environ.get("LANGUAGE_MODEL_PATH") or os.environ.get("PREPROCESSING_FASTTEXT_MODEL")
         try:
             lang_min_conf = float(os.environ.get("LANGUAGE_MIN_CONFIDENCE", "0.5"))

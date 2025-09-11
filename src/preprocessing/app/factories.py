@@ -530,7 +530,7 @@ def make_translator(settings: Settings) -> Any:
     """Return a translator adapter according to Settings (offline by default).
 
     Description:
-        Forward-compatible factory for a translation backend. By default, this
+        Forward-compatible factory for a translate backend. By default, this
         module refuses to construct cloud-backed translators and returns a local
         adapter only when explicitly configured. In the convert-only flow, this
         typically raises NotConfigured.
@@ -542,7 +542,7 @@ def make_translator(settings: Settings) -> Any:
         Any: TranslatorPort-compatible adapter when configured.
 
     Raises:
-        NotConfigured: When translation is not configured for offline/local use.
+        NotConfigured: When translate is not configured for offline/local use.
         FactoryError: If a cloud backend is requested while offline policy is
             active, or when the requested local model is unavailable.
     """

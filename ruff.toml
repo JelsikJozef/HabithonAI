@@ -1,4 +1,4 @@
-[tool.ruff]
+# ruff configuration (top-level TOML expected by ruff)
 line-length = 100
 target-version = "py312"
 exclude = [".git", "build", "dist", ".venv", "migrations"]

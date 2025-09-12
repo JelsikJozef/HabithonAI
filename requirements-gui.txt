@@ -1,0 +1,5 @@
+# Minimal dependencies for the Habithon desktop GUI
+PySide6>=6.5,<7
+
+# Optional: building a standalone app bundle
+pyinstaller>=6,<7

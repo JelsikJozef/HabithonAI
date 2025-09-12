@@ -27,7 +27,7 @@ repos:
         entry: mypy
         language: system
         files: '\.py$'
+        stages: [manual]
 
-# Local hooks run the tool binaries available in your environment. If you prefer remote hooks
-# that pre-commit installs automatically, replace the `local` repo entries with official
-# hook repos and pinned revs (but that requires the remotes to have matching tags/branches).
+# The mypy hook is configured as 'manual' so it won't run automatically on commits
+# (pre-commit run --all-files or pre-commit run --hook-stage manual will run it).

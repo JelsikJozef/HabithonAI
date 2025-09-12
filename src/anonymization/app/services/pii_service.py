@@ -1,15 +1,15 @@
 from __future__ import annotations
-from typing import List, Optional
+
 import os
 
-from ..config.pii_settings import PiiSettings
-from ...domain.entities import DetectionResult, PseudonymizationResult, DeAnonymizationResult
-from ...domain.ports import DetectorPort, TokenVaultPort
 from ...adapters.detectors.adapter import PresidioDetector
 from ...adapters.token_vault.file_store import FileTokenVault
+from ...domain.entities import DeAnonymizationResult, DetectionResult, PseudonymizationResult
+from ...domain.ports import DetectorPort, TokenVaultPort
+from ..config.pii_settings import PiiSettings
+from ..denomize import deanonymize as _deanonymize
 from ..detect import detect_all
 from ..pseudonymize import pseudonymize as _pseudonymize
-from ..denomize import deanonymize as _deanonymize
 
 
 class PiiService:
@@ -26,9 +26,9 @@ class PiiService:
 
     def __init__(
         self,
-        settings: Optional[PiiSettings] = None,
-        detectors: Optional[List[DetectorPort]] = None,
-        vault: Optional[TokenVaultPort] = None,
+        settings: PiiSettings | None = None,
+        detectors: list[DetectorPort] | None = None,
+        vault: TokenVaultPort | None = None,
     ) -> None:
         self.settings = settings or PiiSettings.from_env()
         self.detectors = detectors or [PresidioDetector(settings=self.settings)]
@@ -38,7 +38,7 @@ class PiiService:
         else:
             self.vault = vault
 
-    def detect(self, text: str, language: Optional[str] = None) -> DetectionResult:
+    def detect(self, text: str, language: str | None = None) -> DetectionResult:
         """Detect PII entities in text using configured detectors.
 
         Parameters
@@ -50,7 +50,9 @@ class PiiService:
         """
         return detect_all(text, self.detectors, language=language)
 
-    def pseudonymize(self, text: str, context_id: str, language: Optional[str] = None) -> PseudonymizationResult:
+    def pseudonymize(
+        self, text: str, context_id: str, language: str | None = None
+    ) -> PseudonymizationResult:
         """Pseudonymize detected PII with stable tokens and store mappings.
 
         Parameters
@@ -61,7 +63,9 @@ class PiiService:
         Returns
         - PseudonymizationResult with original text, pseudonymized text, and token mappings persisted in the vault.
         """
-        return _pseudonymize(text, self.detectors, self.vault, context_id=context_id, language=language)
+        return _pseudonymize(
+            text, self.detectors, self.vault, context_id=context_id, language=language
+        )
 
     def deanonymize(self, anonymized_text: str, context_id: str) -> DeAnonymizationResult:
         """Restore original values by replacing tokens using stored mappings.

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import mimetypes
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
-import mimetypes
+from typing import Any
 
 try:  # Prefer but do not require python-magic; stay offline-only
     import magic  # type: ignore
@@ -61,7 +62,7 @@ class Decision:
     path: str | None
     ext: str
     mime: str | None
-    candidates: Tuple[str, ...]
+    candidates: tuple[str, ...]
     selected: str | None
     reason: str
 
@@ -129,14 +130,16 @@ class ParserRegistry:
         sniff_mime: bool = True,
         cache_decisions: bool = True,
     ) -> None:
-        self._map: Dict[str, List[Any]] = {}
-        self._prefs: Dict[str, Tuple[str, ...]] = {k.lower(): tuple(v) for k, v in (preferences or {}).items()}
-        self._disabled: Tuple[str, ...] = tuple((disabled or []))
+        self._map: dict[str, list[Any]] = {}
+        self._prefs: dict[str, tuple[str, ...]] = {
+            k.lower(): tuple(v) for k, v in (preferences or {}).items()
+        }
+        self._disabled: tuple[str, ...] = tuple(disabled or [])
         self._allow_plain = bool(allow_plain_fallback)
         self._sniff_mime = bool(sniff_mime)
         self._cache_enabled = bool(cache_decisions)
         self._cache: MutableMapping[str, Decision] = {}
-        self._last: Optional[Decision] = None
+        self._last: Decision | None = None
 
         def _ingest(src: Mapping[str, Any] | None) -> None:
             if not src:
@@ -195,7 +198,7 @@ class ParserRegistry:
         *,
         mime: str | None = None,
         content_sniff: bool = False,
-    ) -> Tuple[object, Decision]:
+    ) -> tuple[object, Decision]:
         """Select the best parser given a file reference and optional MIME.
 
         Parameters
@@ -219,7 +222,7 @@ class ParserRegistry:
             When no suitable parser (including optional fallback) can be selected.
         """
         # Cache by absolute path string when possible
-        path_str: Optional[str] = None
+        path_str: str | None = None
         ext: str = ""
         if isinstance(file, RawDocument):
             path_str = str(file.path.resolve()) if file.path else None
@@ -244,7 +247,14 @@ class ParserRegistry:
         candidates = self._candidates_for(ext)
         if candidates:
             parser = candidates[0]
-            dec = Decision(path_str, ext, mime, tuple(_parser_name(p) for p in candidates), _parser_name(parser), "by_ext")
+            dec = Decision(
+                path_str,
+                ext,
+                mime,
+                tuple(_parser_name(p) for p in candidates),
+                _parser_name(parser),
+                "by_ext",
+            )
             self._remember(path_str, dec)
             return parser, dec
 
@@ -255,7 +265,14 @@ class ParserRegistry:
             candidates = self._candidates_for(detected_ext)
             if candidates:
                 parser = candidates[0]
-                dec = Decision(path_str, detected_ext, detected_mime, tuple(_parser_name(p) for p in candidates), _parser_name(parser), "by_mime")
+                dec = Decision(
+                    path_str,
+                    detected_ext,
+                    detected_mime,
+                    tuple(_parser_name(p) for p in candidates),
+                    _parser_name(parser),
+                    "by_mime",
+                )
                 self._remember(path_str, dec)
                 return parser, dec
 
@@ -269,7 +286,14 @@ class ParserRegistry:
                     candidates = self._candidates_for(probed_ext)
                     if candidates:
                         parser = candidates[0]
-                        dec = Decision(path_str, probed_ext, probed, tuple(_parser_name(p) for p in candidates), _parser_name(parser), "by_magic")
+                        dec = Decision(
+                            path_str,
+                            probed_ext,
+                            probed,
+                            tuple(_parser_name(p) for p in candidates),
+                            _parser_name(parser),
+                            "by_magic",
+                        )
                         self._remember(path_str, dec)
                         return parser, dec
             except Exception:  # pragma: no cover - best-effort sniff
@@ -282,7 +306,14 @@ class ParserRegistry:
                 candidates = self._candidates_for(k)
                 if candidates:
                     parser = candidates[0]
-                    dec = Decision(path_str, k, detected_mime, tuple(_parser_name(p) for p in candidates), _parser_name(parser), "fallback")
+                    dec = Decision(
+                        path_str,
+                        k,
+                        detected_mime,
+                        tuple(_parser_name(p) for p in candidates),
+                        _parser_name(parser),
+                        "fallback",
+                    )
                     self._remember(path_str, dec)
                     return parser, dec
 
@@ -290,7 +321,7 @@ class ParserRegistry:
         raise self._unknown_ext_error(ext, detected_mime)
 
     # ----- Internals -----
-    def _candidates_for(self, ext: str) -> List[object]:
+    def _candidates_for(self, ext: str) -> list[object]:
         ext = _normalize_ext(ext)
         items = list(self._map.get(ext, []))
         if not items:
@@ -301,7 +332,13 @@ class ParserRegistry:
         prefs = self._prefs.get(ext)
         if prefs:
             pref_order = list(prefs)
-            items.sort(key=lambda p: (pref_order.index(_parser_name(p)) if _parser_name(p) in pref_order else len(pref_order)))
+            items.sort(
+                key=lambda p: (
+                    pref_order.index(_parser_name(p))
+                    if _parser_name(p) in pref_order
+                    else len(pref_order)
+                )
+            )
         return items
 
     def _first_enabled_for_name(self, ext: str, name: str) -> object | None:
@@ -325,7 +362,7 @@ class ParserRegistry:
         except Exception:  # pragma: no cover
             return ""
 
-    def _guess_mime_from_path(self, path_str: Optional[str]) -> str | None:
+    def _guess_mime_from_path(self, path_str: str | None) -> str | None:
         if not path_str:
             return None
         try:
@@ -334,7 +371,7 @@ class ParserRegistry:
         except Exception:  # pragma: no cover
             return None
 
-    def _remember(self, path_str: Optional[str], decision: Decision) -> None:
+    def _remember(self, path_str: str | None, decision: Decision) -> None:
         self._last = decision
         if self._cache_enabled and path_str:
             self._cache[path_str] = decision
@@ -353,7 +390,6 @@ class ParserRegistry:
 
     # Read-only observability accessors
     @property
-    def last_decision(self) -> Optional[Decision]:
+    def last_decision(self) -> Decision | None:
         """Return the most recent Decision (if any)."""
         return self._last
-

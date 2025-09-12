@@ -18,13 +18,13 @@ Conventions
 Versioning
 - If you rotate formats, you can prefix IDs (e.g., v2_) using the 'version' parameter.
 """
+
 from __future__ import annotations
 
-from typing import Optional
 import hashlib
 import re
 
-from .hashing import normalize_text, make_document_id
+from .hashing import make_document_id, normalize_text
 
 SAFE_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789-_.:")
 MAX_ID_LEN_DEFAULT = 128
@@ -74,8 +74,8 @@ def trim_id(value: str, *, max_len: int = MAX_ID_LEN_DEFAULT) -> str:
 def doc_id_from_text(
     canonical_text: str,
     *,
-    salt: Optional[str] = None,
-    version: Optional[str] = None,
+    salt: str | None = None,
+    version: str | None = None,
     length: int = 16,
     max_len: int = MAX_ID_LEN_DEFAULT,
 ) -> str:
@@ -106,7 +106,9 @@ def _join_and_limit(parts: list[str], *, max_len: int) -> str:
     return trim_id(to_safe(raw), max_len=max_len)
 
 
-def context_id(doc_id: str, variant: str, *, max_len: int = MAX_ID_LEN_DEFAULT, prefix: Optional[str] = None) -> str:
+def context_id(
+    doc_id: str, variant: str, *, max_len: int = MAX_ID_LEN_DEFAULT, prefix: str | None = None
+) -> str:
     """
     Build a context_id unique per variant to scope TokenVault mappings.
 
@@ -126,7 +128,7 @@ def point_id(
     *,
     width: int = 6,
     max_len: int = MAX_ID_LEN_DEFAULT,
-    prefix: Optional[str] = None,
+    prefix: str | None = None,
 ) -> str:
     """
     Create a stable Qdrant point ID for a chunk.
@@ -138,4 +140,3 @@ def point_id(
     idx = f"{max(0, int(index)):0{int(width)}d}"
     parts = ([to_safe(prefix)] if prefix else []) + [d, v, idx]
     return _join_and_limit(parts, max_len=max_len)
-

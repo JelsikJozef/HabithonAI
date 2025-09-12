@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping
 
 from src.preprocessing import settings_translation as st
@@ -26,7 +25,10 @@ def test_validate_translation_settings_ok_marian(tmp_path, monkeypatch):
     cfg["langid"]["candidates"] = ["sk", "de", "en"]
     cfg["cache"]["root_path"] = str(cache_file)
     # Minimal marian models mapping covering candidates
-    cfg["marian"]["models"] = {"sk": "Helsinki-NLP/opus-mt-sk-en", "de": "Helsinki-NLP/opus-mt-de-en"}
+    cfg["marian"]["models"] = {
+        "sk": "Helsinki-NLP/opus-mt-sk-en",
+        "de": "Helsinki-NLP/opus-mt-de-en",
+    }
     cfg["marian"]["device"] = "cpu"
     cfg["marian"]["local_files_only"] = True
 

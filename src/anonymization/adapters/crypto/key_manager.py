@@ -14,6 +14,7 @@ Constraints:
 - Deterministic per tenant.
 - Supports rotation by honoring active_kid and keeping previous keys.
 """
+
 from __future__ import annotations
 
 import base64
@@ -22,13 +23,12 @@ import hashlib
 import hmac
 import json
 import os
-from typing import Dict, Tuple, Optional
 
 
 @dataclasses.dataclass(frozen=True)
 class KeySet:
     active_kid: str
-    keys: Dict[str, bytes]
+    keys: dict[str, bytes]
 
 
 _ENV_VAR = "ANON_KEYSET"
@@ -42,14 +42,14 @@ def _default_keyset() -> KeySet:
     return KeySet(active_kid="kid0", keys=keys)
 
 
-def _load_env_keyset() -> Optional[KeySet]:
+def _load_env_keyset() -> KeySet | None:
     s = os.getenv(_ENV_VAR)
     if not s:
         return None
     obj = json.loads(s)
     active = obj["active_kid"]
     raw_keys = obj["keys"]
-    keys: Dict[str, bytes] = {}
+    keys: dict[str, bytes] = {}
     for kid, b64 in raw_keys.items():
         keys[kid] = base64.b64decode(b64)
     return KeySet(active_kid=active, keys=keys)
@@ -62,7 +62,7 @@ def load_keyset() -> KeySet:
     return ks
 
 
-def _derive_subkey(master: bytes, tenant_id: Optional[str]) -> bytes:
+def _derive_subkey(master: bytes, tenant_id: str | None) -> bytes:
     """Derive tenant-scoped subkey deterministically using HMAC-SHA256.
 
     subkey = HMAC(master, b"tenant:" + tenant + b"\x00", SHA256)
@@ -75,14 +75,13 @@ def _derive_subkey(master: bytes, tenant_id: Optional[str]) -> bytes:
     return mac.digest()
 
 
-def get_hmac_key(tenant_id: Optional[str] = None) -> Tuple[str, bytes]:
+def get_hmac_key(tenant_id: str | None = None) -> tuple[str, bytes]:
     ks = load_keyset()
     active = ks.active_kid
     master = ks.keys[active]
     return active, _derive_subkey(master, tenant_id)
 
 
-def get_all_hmac_keys(tenant_id: Optional[str] = None) -> Dict[str, bytes]:
+def get_all_hmac_keys(tenant_id: str | None = None) -> dict[str, bytes]:
     ks = load_keyset()
     return {kid: _derive_subkey(k, tenant_id) for kid, k in ks.keys.items()}
-

@@ -57,7 +57,7 @@ Known limitations
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 # Public constants for registry wiring
 EXTENSIONS: tuple[str, ...] = ("jpg", "jpeg")
@@ -170,7 +170,7 @@ class JpgToMd:
         self,
         *,
         ocr_engine: str = "tesseract",
-        ocr_langs: Optional[tuple[str, ...]] = None,
+        ocr_langs: tuple[str, ...] | None = None,
         max_working_dpi: int = 300,
         confidence_threshold: float = 0.55,
         fail_on_low_confidence: bool = False,
@@ -184,7 +184,7 @@ class JpgToMd:
         self._fail_on_low_confidence = bool(fail_on_low_confidence)
         self._save_processed_assets = bool(save_processed_assets)
         self._assets_subdir = str(assets_subdir)
-        self.supported_features: Dict[str, bool] = {
+        self.supported_features: dict[str, bool] = {
             "grayscale": True,
             "illumination_normalization": True,
             "binarization": True,
@@ -287,7 +287,7 @@ class JpgToMd:
             "JpgToMd.parse is not implemented in this stub. See the docstring for the full contract."
         )
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         """Return a static capability description for audit/telemetry.
 
         Returns:

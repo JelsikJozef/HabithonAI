@@ -36,19 +36,24 @@ Public API
 Keep this module thin and auditable. Avoid shared mutable state; parallelize at file
 level only, and ensure deterministic aggregation of results.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
-from fnmatch import fnmatch
 import json
 import logging
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Literal, Mapping, MutableMapping, Optional, Sequence, Tuple
 import os
 import re
 import threading
+from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from fnmatch import fnmatch
+from pathlib import Path
+from typing import (
+    Any,
+    Literal,
+)
 
 # Local domain types
 try:
@@ -58,10 +63,13 @@ except Exception:  # pragma: no cover - defensive in case of partial install
 
 # Registry (adapters/parsers/registry.py)
 try:
-    from ..adapters.parsers.registry import ParserRegistry  # type: ignore
-    from ..adapters.parsers.registry import ParserNotFoundError  # type: ignore[attr-defined]
+    from ..adapters.parsers.registry import (
+        ParserNotFoundError,  # type: ignore[attr-defined]
+        ParserRegistry,  # type: ignore
+    )
 except Exception:  # pragma: no cover - graceful degradation
     ParserRegistry = None  # type: ignore
+
     class ParserNotFoundError(Exception):  # type: ignore
         pass
 
@@ -69,6 +77,7 @@ except Exception:  # pragma: no cover - graceful degradation
 # ---------------------------
 # Data contracts and results
 # ---------------------------
+
 
 @dataclass(frozen=True)
 class FileError:
@@ -114,14 +123,14 @@ class FileResult:
 
     src_path: str
     out_md_path: str
-    assets_dir: Optional[str]
-    adapter_key: Optional[str]
+    assets_dir: str | None
+    adapter_key: str | None
     status: Literal["ok", "skip", "fail"]
     duration_ms: int
-    size_bytes_src: Optional[int] = None
-    warnings: List[str] = field(default_factory=list)
+    size_bytes_src: int | None = None
+    warnings: list[str] = field(default_factory=list)
     meta_written: Literal["none", "sidecar", "inline"] = "none"
-    error: Optional[FileError] = None
+    error: FileError | None = None
 
 
 @dataclass(frozen=True)
@@ -149,7 +158,7 @@ class RunResult:
     converted_ok: int
     skipped_existing: int
     failed: int
-    files: List[FileResult]
+    files: list[FileResult]
     config_echo: Mapping[str, Any]
     terminated_early: bool = False
 
@@ -167,8 +176,8 @@ class PlanCandidate:
 
     src_path: str
     out_md_path: str
-    adapter_key: Optional[str]
-    reason_if_skipped: Optional[str]
+    adapter_key: str | None
+    reason_if_skipped: str | None
 
 
 @dataclass(frozen=True)
@@ -196,13 +205,14 @@ class Plan:
         summary: Aggregate counts for matched, conversions, and would-skip.
     """
 
-    candidates: List[PlanCandidate]
+    candidates: list[PlanCandidate]
     summary: PlanSummary
 
 
 # ---------------------------
 # Configuration (pure data)
 # ---------------------------
+
 
 @dataclass(frozen=True)
 class ConvertOnlyConfig:
@@ -243,11 +253,11 @@ class ConvertOnlyConfig:
 
     # Scanning & selection
     recurse: bool = True
-    include_ext: List[str] = field(
+    include_ext: list[str] = field(
         default_factory=lambda: [".docx", ".xlsx", ".pdf", ".jpg", ".jpeg", ".msg"]
     )
-    exclude_glob: List[str] = field(default_factory=list)
-    max_files: Optional[int] = None
+    exclude_glob: list[str] = field(default_factory=list)
+    max_files: int | None = None
 
     # Writing
     overwrite: bool = False
@@ -263,14 +273,15 @@ class ConvertOnlyConfig:
 
     # Diagnostics
     log_level: Literal["ERROR", "WARNING", "INFO", "DEBUG"] = "INFO"
-    report_path: Optional[str] = None
+    report_path: str | None = None
 
 
 # ---------------------------
 # Internal helpers/ports
 # ---------------------------
 
-def _coerce_config(cfg: Any) -> "ConvertOnlyConfig":
+
+def _coerce_config(cfg: Any) -> ConvertOnlyConfig:
     """Return a ConvertOnlyConfig from either a config object or a dict-like.
 
     Accepts a ConvertOnlyConfig instance or a mapping produced by the CLI
@@ -285,7 +296,9 @@ def _coerce_config(cfg: Any) -> "ConvertOnlyConfig":
         ui = cfg.get("ui", {}) if isinstance(cfg.get("ui"), Mapping) else {}
         return ConvertOnlyConfig(
             recurse=bool(scan.get("recurse", True)),
-            include_ext=list(scan.get("include_ext", [".docx", ".xlsx", ".pdf", ".jpg", ".jpeg", ".msg"])),
+            include_ext=list(
+                scan.get("include_ext", [".docx", ".xlsx", ".pdf", ".jpg", ".jpeg", ".msg"])
+            ),
             exclude_glob=list(scan.get("exclude_glob", [])),
             max_files=scan.get("max_files", None),
             overwrite=bool(write.get("overwrite", False)),
@@ -301,6 +314,7 @@ def _coerce_config(cfg: Any) -> "ConvertOnlyConfig":
         )
     # Fallback to defaults when unknown type
     return ConvertOnlyConfig()
+
 
 class _EncodingNormalizer:
     """Default offline normalizer enforcing UTF-8 and newline policy.
@@ -354,11 +368,13 @@ class _MarkdownSerializer:
 
 # Obtain dependencies via factories when available; otherwise, fall back to defaults
 
+
 def _get_registry() -> Any:
     """Return a ParserRegistry instance using factories or a local default."""
     # Try factories first
     try:  # pragma: no cover - import-level resilience
         from . import factories as _fact
+
         if hasattr(_fact, "get_parser_registry"):
             return _fact.get_parser_registry()
     except Exception:
@@ -366,31 +382,36 @@ def _get_registry() -> Any:
     # Fallback: instantiate a default registry with known adapters if module is present
     if ParserRegistry is None:
         raise RuntimeError("ParserRegistry is not available; cannot proceed")
-    static_map: Dict[str, Any] = {}
+    static_map: dict[str, Any] = {}
     # Import known adapters lazily; ignore if unavailable
     try:
         from ..adapters.parsers.docx_to_md import DocxToMd as _Docx
+
         static_map["docx"] = _Docx()
     except Exception:
         pass
     try:
         from ..adapters.parsers.xlsx_to_md import XlsxToMd as _Xlsx  # type: ignore
+
         static_map["xlsx"] = _Xlsx()  # type: ignore
     except Exception:
         pass
     try:
         from ..adapters.parsers.pdf_to_md import PdfToMd as _Pdf
+
         static_map["pdf"] = _Pdf()
     except Exception:
         pass
     try:
         from ..adapters.parsers.jpg_to_md import JpgToMd as _Jpg  # type: ignore
+
         static_map["jpg"] = _Jpg()  # type: ignore
         static_map["jpeg"] = _Jpg()  # type: ignore
     except Exception:
         pass
     try:
         from ..adapters.parsers.msg_to_md import MsgToMd as _Msg  # type: ignore
+
         static_map["msg"] = _Msg()  # type: ignore
     except Exception:
         pass
@@ -401,6 +422,7 @@ def _get_encoding_normalizer() -> _EncodingNormalizer:
     """Return an encoding normalizer from factories or the built-in default."""
     try:  # pragma: no cover
         from . import factories as _fact
+
         if hasattr(_fact, "get_encoding_normalizer"):
             return _fact.get_encoding_normalizer()  # type: ignore[return-value]
     except Exception:
@@ -412,6 +434,7 @@ def _get_md_serializer() -> _MarkdownSerializer:
     """Return a Markdown serializer from factories or the built-in default."""
     try:  # pragma: no cover
         from . import factories as _fact
+
         if hasattr(_fact, "get_markdown_serializer"):
             return _fact.get_markdown_serializer()  # type: ignore[return-value]
     except Exception:
@@ -423,7 +446,10 @@ def _get_md_serializer() -> _MarkdownSerializer:
 # Public API
 # ---------------------------
 
-def plan_folder(src_dir: Path | str, out_dir: Path | str, config: ConvertOnlyConfig | Mapping[str, Any]) -> Plan:
+
+def plan_folder(
+    src_dir: Path | str, out_dir: Path | str, config: ConvertOnlyConfig | Mapping[str, Any]
+) -> Plan:
     """Compute a deterministic, side-effect-free plan for converting a folder.
 
     Description:
@@ -476,7 +502,7 @@ def plan_folder(src_dir: Path | str, out_dir: Path | str, config: ConvertOnlyCon
     scanned = 0
     matched = 0
     would_skip_existing = 0
-    candidates: List[PlanCandidate] = []
+    candidates: list[PlanCandidate] = []
 
     files_iter = _iter_files(src_root, recurse=config.recurse)
     for abs_path in files_iter:
@@ -489,12 +515,14 @@ def plan_folder(src_dir: Path | str, out_dir: Path | str, config: ConvertOnlyCon
             continue
         matched += 1
         out_md = _map_out_path(abs_path, src_root, out_root)
-        adapter_key: Optional[str] = None
-        reason: Optional[str] = None
+        adapter_key: str | None = None
+        reason: str | None = None
         # Try resolving adapter to include its key in the plan
         try:
             parser, decision = registry.choose(str(abs_path))  # type: ignore[attr-defined]
-            adapter_key = getattr(parser, "name", getattr(parser, "__class__", type("_", (), {})()).__name__)
+            adapter_key = getattr(
+                parser, "name", getattr(parser, "__class__", type("_", (), {})()).__name__
+            )
         except Exception:
             reason = "unsupported_extension"
         # Existing target handling
@@ -516,11 +544,15 @@ def plan_folder(src_dir: Path | str, out_dir: Path | str, config: ConvertOnlyCon
     candidates.sort(key=lambda c: c.src_path)
 
     would_convert = sum(1 for c in candidates if c.reason_if_skipped is None)
-    summary = PlanSummary(matched=matched, would_convert=would_convert, would_skip_existing=would_skip_existing)
+    summary = PlanSummary(
+        matched=matched, would_convert=would_convert, would_skip_existing=would_skip_existing
+    )
     return Plan(candidates=candidates, summary=summary)
 
 
-def convert_file(src_path: Path | str, out_dir: Path | str, config: ConvertOnlyConfig | Mapping[str, Any]) -> FileResult:
+def convert_file(
+    src_path: Path | str, out_dir: Path | str, config: ConvertOnlyConfig | Mapping[str, Any]
+) -> FileResult:
     """Convert a single file to Markdown end-to-end.
 
     Description:
@@ -579,10 +611,12 @@ def convert_file(src_path: Path | str, out_dir: Path | str, config: ConvertOnlyC
 
     # Resolve parser via registry
     registry = _get_registry()
-    adapter_key: Optional[str] = None
+    adapter_key: str | None = None
     try:
         parser, decision = registry.choose(str(src))  # type: ignore[attr-defined]
-        adapter_key = getattr(parser, "name", getattr(parser, "__class__", type("_", (), {})()).__name__)
+        adapter_key = getattr(
+            parser, "name", getattr(parser, "__class__", type("_", (), {})()).__name__
+        )
     except ParserNotFoundError as e:
         return FileResult(
             src_path=str(src),
@@ -631,19 +665,27 @@ def convert_file(src_path: Path | str, out_dir: Path | str, config: ConvertOnlyC
             )
         # Else: file exists but is empty (size 0) or size unknown -> proceed to write
         if existing_size == 0:
-            logging.getLogger(__name__).info("Existing target is empty; will overwrite despite overwrite=False: %s", out_md)
+            logging.getLogger(__name__).info(
+                "Existing target is empty; will overwrite despite overwrite=False: %s", out_md
+            )
 
     # Build RawDocument for adapters that expect it
     raw_doc: Any
     try:
         from datetime import datetime as _dt
-        raw_doc = RawDocument(path=src, size=size_bytes or 0, mtime=_dt.fromtimestamp(src.stat().st_mtime), ext=src.suffix)
+
+        raw_doc = RawDocument(
+            path=src,
+            size=size_bytes or 0,
+            mtime=_dt.fromtimestamp(src.stat().st_mtime),
+            ext=src.suffix,
+        )
     except Exception:
         # Fallback when RawDocument is not available at runtime
         raw_doc = {"path": str(src), "ext": src.suffix}
 
-    warnings_list: List[str] = []
-    meta: Dict[str, Any] = {}
+    warnings_list: list[str] = []
+    meta: dict[str, Any] = {}
     try:
         # Adapter is opaque; expected to expose parse(raw) -> MarkdownDoc-like object
         parsed = parser.parse(raw_doc)
@@ -705,7 +747,9 @@ def convert_file(src_path: Path | str, out_dir: Path | str, config: ConvertOnlyC
             size_bytes_src=size_bytes,
             warnings=warnings_list,
             meta_written="none",
-            error=FileError(code="adapter_error", message="Strict mode: warnings promoted to error"),
+            error=FileError(
+                code="adapter_error", message="Strict mode: warnings promoted to error"
+            ),
         )
 
     # Normalize encoding/newlines
@@ -751,7 +795,9 @@ def convert_file(src_path: Path | str, out_dir: Path | str, config: ConvertOnlyC
     )
 
 
-def convert_folder(src_dir: Path | str, out_dir: Path | str, config: ConvertOnlyConfig | Mapping[str, Any]) -> RunResult:
+def convert_folder(
+    src_dir: Path | str, out_dir: Path | str, config: ConvertOnlyConfig | Mapping[str, Any]
+) -> RunResult:
     """Convert all supported files in a folder to Markdown.
 
     Description:
@@ -797,13 +843,15 @@ def convert_folder(src_dir: Path | str, out_dir: Path | str, config: ConvertOnly
         raise ValueError("workers must be >= 1")
 
     # Logging level
-    logging.getLogger(__name__).setLevel(getattr(logging, str(config.log_level).upper(), logging.INFO))
+    logging.getLogger(__name__).setLevel(
+        getattr(logging, str(config.log_level).upper(), logging.INFO)
+    )
 
     # Build list of candidates deterministically
     include = _normalize_ext_list(config.include_ext)
     exclude_globs = list(config.exclude_glob)
     scanned = 0
-    matched_files: List[Path] = []
+    matched_files: list[Path] = []
     for abs_path in _iter_files(src_root, recurse=config.recurse):
         scanned += 1
         rel = abs_path.relative_to(src_root)
@@ -819,7 +867,7 @@ def convert_folder(src_dir: Path | str, out_dir: Path | str, config: ConvertOnly
 
     # Convert sequentially or with threads; collect deterministic results
     started_at = _now_iso()
-    results: List[FileResult] = []
+    results: list[FileResult] = []
     lock = threading.Lock()
     terminated_early = False
 
@@ -852,7 +900,9 @@ def convert_folder(src_dir: Path | str, out_dir: Path | str, config: ConvertOnly
                     res = FileResult(
                         src_path=str(p),
                         out_md_path=str(_map_out_path(p, src_root, out_root)),
-                        assets_dir=str((_map_out_path(p, src_root, out_root)).parent / config.assets_subdir),
+                        assets_dir=str(
+                            (_map_out_path(p, src_root, out_root)).parent / config.assets_subdir
+                        ),
                         adapter_key=None,
                         status="fail",
                         duration_ms=0,
@@ -918,8 +968,9 @@ def convert_folder(src_dir: Path | str, out_dir: Path | str, config: ConvertOnly
 # Utilities
 # ---------------------------
 
+
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def _now_ns() -> int:
@@ -977,4 +1028,3 @@ def _write_report(path: Path, run: RunResult) -> None:
     payload = asdict(run)
     with path.open("w", encoding="utf-8", newline="\n") as f:
         json.dump(payload, f, ensure_ascii=False, sort_keys=True)
-

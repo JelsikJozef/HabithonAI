@@ -26,14 +26,14 @@ Contracts (applies to all ports in this module):
 - Concurrency: Read-only operations should be thread-safe; adapters may batch internally within documented limits.
 """
 
-from pathlib import Path
-from typing import Any, AsyncIterator, Iterable, Protocol, TypedDict, Optional, runtime_checkable
+from collections.abc import AsyncIterator, Iterable
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Protocol, TypedDict, runtime_checkable
 
+from .errors import DomainError
 from .models import ParsedDocument, RawDocument
 from .models_markdown import MarkdownDoc
-from .errors import DomainError
-
 
 # ----------------------------
 # Existing ports (preserved)
@@ -124,7 +124,7 @@ class OcrPort(Protocol):
         """
         ...
 
-    def recognize(self, image_path: str, *, langs: list[str]) -> "OcrResult":  # type: ignore[override]
+    def recognize(self, image_path: str, *, langs: list[str]) -> OcrResult:  # type: ignore[override]
         """Perform OCR and return structured result with confidences.
 
         Args:
@@ -376,7 +376,7 @@ class TargetPaths(TypedDict):
 
     out_md_path: str
     assets_dir: str
-    sidecar_meta_path: Optional[str]
+    sidecar_meta_path: str | None
 
 
 @runtime_checkable
@@ -401,7 +401,7 @@ class WriterContext(Protocol):
     write_meta: str
     overwrite: bool
     dry_run: bool
-    ensure_final_newline: Optional[bool]
+    ensure_final_newline: bool | None
 
 
 class WriteResult(TypedDict):
@@ -422,14 +422,14 @@ class WriteResult(TypedDict):
 
     status: str
     out_md_path: str
-    assets_dir: Optional[str]
+    assets_dir: str | None
     assets_written: int
-    bytes_written_md: Optional[int]
-    bytes_written_assets: Optional[int]
+    bytes_written_md: int | None
+    bytes_written_assets: int | None
     sidecar_written: bool
     renamed_assets: list[dict[str, str]]
     warnings: list[str]
-    error: Optional[dict[str, str]]
+    error: dict[str, str] | None
 
 
 class MarkdownSerializerPort(Protocol):
@@ -491,7 +491,9 @@ class TranslatorPort(Protocol):
         TranslationError, ModelNotAvailableError (alias using TranslationError).
     """
 
-    def translate_markdown(self, doc: MarkdownDoc, src_lang: str, tgt_lang: str = "en") -> MarkdownDoc:
+    def translate_markdown(
+        self, doc: MarkdownDoc, src_lang: str, tgt_lang: str = "en"
+    ) -> MarkdownDoc:
         """Translate text nodes in a MarkdownDoc while preserving structure.
 
         Args:
@@ -511,7 +513,7 @@ class TranslatorPort(Protocol):
 class AnonymizationPort(Protocol):
     """Detect PII and perform deterministic pseudonymization/de-anonymization."""
 
-    def detect(self, text: str, lang: str) -> "PiiResult":
+    def detect(self, text: str, lang: str) -> PiiResult:
         """Detect PII entities in text.
 
         Args:
@@ -526,7 +528,7 @@ class AnonymizationPort(Protocol):
         """
         ...
 
-    def pseudonymize(self, text: str, *, context_id: str, lang: str) -> "PseudonymizeResult":
+    def pseudonymize(self, text: str, *, context_id: str, lang: str) -> PseudonymizeResult:
         """Deterministically pseudonymize PII in text.
 
         Args:
@@ -562,7 +564,7 @@ class AnonymizationPort(Protocol):
 class VectorBuilderPort(Protocol):
     """Chunk Markdown, compute embeddings, and assemble vector points."""
 
-    def build_points(self, doc: MarkdownDoc, *, variant: str, meta: dict) -> list["Point"]:
+    def build_points(self, doc: MarkdownDoc, *, variant: str, meta: dict) -> list[Point]:
         """Build vector points with payload from a MarkdownDoc.
 
         Args:
@@ -582,7 +584,7 @@ class VectorBuilderPort(Protocol):
 class VectorDBPort(Protocol):
     """Upsert/query vector points in the database (e.g., Qdrant/Faiss)."""
 
-    def upsert(self, points: list["Point"], *, collection: str) -> "UpsertResult":
+    def upsert(self, points: list[Point], *, collection: str) -> UpsertResult:
         """Upsert vector points into a collection.
 
         Args:
@@ -663,21 +665,21 @@ class LanguageDetectError(DomainError):
         into this domain error. Provide a stable error code and short message.
     """
 
-    def __init__(self, message: str, details: Optional[dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("language_detect_error", message, details)
 
 
 class GlossaryError(DomainError):
     """Glossary rules or I/O failure in term normalization."""
 
-    def __init__(self, message: str, details: Optional[dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("glossary_error", message, details)
 
 
 class CacheError(DomainError):
     """Cache store access or consistency failure."""
 
-    def __init__(self, message: str, details: Optional[dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("cache_error", message, details)
 
 
@@ -697,9 +699,9 @@ class LanguageDetectPort(Protocol):
     def detect(
         self,
         text: str,
-        hints: Optional[dict[str, Any]] = None,
+        hints: dict[str, Any] | None = None,
         *,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, float]:
         """Detect the primary language of Markdown text.
 
@@ -737,9 +739,9 @@ class TranslatePort(Protocol):
         doc: MarkdownDoc,
         src_lang: str,
         tgt_lang: str,
-        options: Optional[dict[str, Any]] = None,
+        options: dict[str, Any] | None = None,
         *,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> MarkdownDoc:
         """Translate a Markdown document to the target language (project default: English).
 
@@ -801,8 +803,8 @@ class GlossaryPort(Protocol):
         src_lang: str,
         tgt_lang: str,
         mode: str,
-        glossary_id: Optional[str],
-        context: Optional[dict[str, Any]] = None,
+        glossary_id: str | None,
+        context: dict[str, Any] | None = None,
     ) -> str:
         """Normalize a plain text segment using glossary rules.
 
@@ -831,7 +833,7 @@ class CachePort(Protocol):
         - Crash-safe: partial writes must not be surfaced to callers.
     """
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         """Return a cached value for a deterministic key if present.
 
         Args:
@@ -845,7 +847,7 @@ class CachePort(Protocol):
         """
         ...
 
-    def put(self, key: str, value: str, ttl: Optional[int] = None) -> None:
+    def put(self, key: str, value: str, ttl: int | None = None) -> None:
         """Store a value under a deterministic key with optional expiration.
 
         Args:

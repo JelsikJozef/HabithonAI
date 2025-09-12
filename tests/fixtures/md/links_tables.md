@@ -9,4 +9,3 @@ A table:
 An image: ![Alt Text](https://example.com/img.png)
 
 A bare link <https://example.com/raw> inside text.
-

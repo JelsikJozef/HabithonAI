@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 import re
 import tempfile
-from datetime import datetime, timezone, timedelta
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional, Iterable
 
 __all__ = [
     "utc_now_iso",
@@ -19,7 +19,7 @@ __all__ = [
 ]
 
 # Track last timestamp to ensure monotonic non-decreasing sequence within a run
-_last_iso_ts: Optional[str] = None
+_last_iso_ts: str | None = None
 
 
 def utc_now_iso() -> str:
@@ -28,7 +28,7 @@ def utc_now_iso() -> str:
     Example: '2025-08-21T19:00:00Z'. Ensures monotonic non-decreasing output within a single run.
     """
     global _last_iso_ts
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ts = now.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
     if _last_iso_ts is not None and ts < _last_iso_ts:
         # Clock skew; bump to last
@@ -36,7 +36,7 @@ def utc_now_iso() -> str:
     elif _last_iso_ts is not None and ts == _last_iso_ts:
         # Same-second collision; bump by 1 second
         try:
-            base = datetime.strptime(_last_iso_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            base = datetime.strptime(_last_iso_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
             ts = (base + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         except Exception:
             # Fallback: append nothing, keep as-is
@@ -67,7 +67,9 @@ def atomic_write_text(
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         # Create a temporary file in the target directory
-        with tempfile.NamedTemporaryFile("w", dir=str(p.parent), delete=False, encoding=encoding) as tmp:
+        with tempfile.NamedTemporaryFile(
+            "w", dir=str(p.parent), delete=False, encoding=encoding
+        ) as tmp:
             tmp_path = Path(tmp.name)
             tmp.write(text)
             tmp.flush()
@@ -114,13 +116,15 @@ def shorten_middle(s: str, max_len: int = 120) -> str:
     return f"{s[:head]}...{s[-tail:]}"
 
 
-def require_non_empty_str(value: Optional[str], name: str) -> str:
+def require_non_empty_str(value: str | None, name: str) -> str:
     """Validate a non-empty string; strip and return it."""
     if value is None:
         raise ValueError(f"{name} is required (got None). Provide a non-empty string.")
     s = str(value).strip()
     if not s:
-        raise ValueError(f"{name} must be a non-empty string (got: {repr(value)}). Provide a non-empty value.")
+        raise ValueError(
+            f"{name} must be a non-empty string (got: {repr(value)}). Provide a non-empty value."
+        )
     return s
 
 
@@ -150,10 +154,9 @@ def validate_language_code(code: str) -> str:
     return c
 
 
-def require_non_empty_content(text: Optional[str], context: str = "content") -> str:
+def require_non_empty_content(text: str | None, context: str = "content") -> str:
     """Ensure content is not empty before hashing/chunking/embedding."""
     s = require_non_empty_str(text, context)
     if not s.strip():
         raise ValueError(f"{context} cannot be empty or whitespace-only. Provide meaningful input.")
     return s
-

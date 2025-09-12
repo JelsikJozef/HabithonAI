@@ -1,9 +1,9 @@
-import time
 import threading
+import time
 
 import pytest
 
-from src.preprocessing.adapters.cache.disk_cache import DiskCache, CacheError
+from src.preprocessing.adapters.cache.disk_cache import CacheError, DiskCache
 
 
 def test_put_get_ttl_and_size_guard(tmp_path):
@@ -54,7 +54,10 @@ def test_concurrent_put_get(tmp_path):
 
     t1 = threading.Thread(target=writer)
     t2 = threading.Thread(target=reader)
-    t1.start(); t2.start(); t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
     # Open a new connection to count items
     c3 = DiskCache(str(db))
     c3.open()

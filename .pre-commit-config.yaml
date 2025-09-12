@@ -1,0 +1,33 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: black
+        name: black
+        entry: black
+        language: system
+        types: [python]
+
+      - id: ruff
+        name: ruff
+        entry: ruff
+        args: ["check"]
+        language: system
+        types: [python]
+
+      - id: mypy
+        name: mypy
+        entry: mypy
+        language: system
+        files: '\.py$'
+
+# Local hooks run the tool binaries available in your environment. If you prefer remote hooks
+# that pre-commit installs automatically, replace the `local` repo entries with official
+# hook repos and pinned revs (but that requires the remotes to have matching tags/branches).

@@ -2,4 +2,3 @@
 from .fasttext_langid import FastTextLangId
 
 __all__ = ["FastTextLangId"]
-

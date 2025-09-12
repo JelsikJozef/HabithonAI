@@ -45,7 +45,7 @@ Registry note
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 # Public constants for registry wiring
 EXTENSIONS: tuple[str, ...] = ("msg",)
@@ -77,7 +77,7 @@ class AttachmentExportPlan:
     """
 
     assets_dir: str
-    filename_map: Dict[str, str]
+    filename_map: dict[str, str]
 
 
 class MsgToMd:
@@ -143,26 +143,28 @@ class MsgToMd:
     def __init__(
         self,
         *,
-        prefer_body: Optional[tuple[str, ...]] = None,
+        prefer_body: tuple[str, ...] | None = None,
         export_assets: bool = True,
         assets_subdir: str = "assets",
-        max_attachment_size_mb: Optional[float] = None,
+        max_attachment_size_mb: float | None = None,
         quoted_reply_mode: str = "blockquote",
         strict_mode: bool = False,
     ) -> None:
         self._prefer_body = tuple(prefer_body) if prefer_body is not None else None
         self._export_assets = bool(export_assets)
         self._assets_subdir = str(assets_subdir)
-        self._max_attachment_size_mb = float(max_attachment_size_mb) if max_attachment_size_mb is not None else None
+        self._max_attachment_size_mb = (
+            float(max_attachment_size_mb) if max_attachment_size_mb is not None else None
+        )
         self._quoted_reply_mode = str(quoted_reply_mode)
         self._strict_mode = bool(strict_mode)
-        self.supported_features: Dict[str, bool] = {
+        self.supported_features: dict[str, bool] = {
             "html": True,
             "text": True,
             "rtf": True,
-            "tables": True,          # best-effort GitHub-style tables
-            "inline_images": True,   # CID mapping to assets
-            "attachments": True,     # listed with size; deterministic names
+            "tables": True,  # best-effort GitHub-style tables
+            "inline_images": True,  # CID mapping to assets
+            "attachments": True,  # listed with size; deterministic names
             "quotes_blockquote": True,
             "quotes_preserve": True,
             "quotes_strip": True,
@@ -173,9 +175,9 @@ class MsgToMd:
 
         Minimal offline implementation using extract_msg. No assets export.
         """
-        from pathlib import Path
         import re
         from datetime import datetime
+        from pathlib import Path
 
         try:
             import extract_msg  # type: ignore
@@ -223,7 +225,12 @@ class MsgToMd:
             if isinstance(x, (list, tuple)):
                 return ", ".join(str(i) for i in x if i)
             return str(x)
-        from_h = getattr(msg, "sender", None) or getattr(msg, "senderemail", None) or getattr(msg, "from_", None)
+
+        from_h = (
+            getattr(msg, "sender", None)
+            or getattr(msg, "senderemail", None)
+            or getattr(msg, "from_", None)
+        )
         to_h = getattr(msg, "to", None)
         cc_h = getattr(msg, "cc", None)
         bcc_h = getattr(msg, "bcc", None)
@@ -241,7 +248,9 @@ class MsgToMd:
             date_utc = None
 
         # Body selection per preference
-        prefer = tuple(self._prefer_body) if self._prefer_body is not None else ("html", "text", "rtf")
+        prefer = (
+            tuple(self._prefer_body) if self._prefer_body is not None else ("html", "text", "rtf")
+        )
         html_body = getattr(msg, "htmlBody", None) or getattr(msg, "html", None)
         text_body = getattr(msg, "body", None)
         rtf_body = getattr(msg, "rtfBody", None)
@@ -279,20 +288,33 @@ class MsgToMd:
         def html_to_md(html: str) -> tuple[str, int, int]:
             # Simplistic, dependency-free HTML→Markdown conversion
             links: list[tuple[str, str]] = []
+
             def _link_repl(m: re.Match) -> str:
                 url = m.group(1) or ""
                 txt = m.group(2) or url
                 links.append((txt, url))
                 return f"[{txt}]({url})"
+
             s = re.sub(r"<\s*br\s*/?>", "\n", html, flags=re.I)
             s = re.sub(r"<\s*/p\s*>", "\n\n", s, flags=re.I)
             s = re.sub(r"<\s*p\s*[^>]*>", "", s, flags=re.I)
-            s = re.sub(r"<\s*h([1-6])[^>]*>(.*?)<\s*/h\1\s*>", lambda m: "#"*int(m.group(1)) + " " + m.group(2) + "\n\n", s, flags=re.I|re.S)
-            s = re.sub(r"<\s*a\s+[^>]*href=\"([^\"]+)\"[^>]*>(.*?)<\s*/a\s*>", _link_repl, s, flags=re.I|re.S)
+            s = re.sub(
+                r"<\s*h([1-6])[^>]*>(.*?)<\s*/h\1\s*>",
+                lambda m: "#" * int(m.group(1)) + " " + m.group(2) + "\n\n",
+                s,
+                flags=re.I | re.S,
+            )
+            s = re.sub(
+                r"<\s*a\s+[^>]*href=\"([^\"]+)\"[^>]*>(.*?)<\s*/a\s*>",
+                _link_repl,
+                s,
+                flags=re.I | re.S,
+            )
             # Strip remaining tags
             s = re.sub(r"<[^>]+>", "", s)
             # Unescape HTML entities
             import html as _html
+
             s = _html.unescape(s)
             # Normalize whitespace/newlines
             s = s.replace("\r\n", "\n").replace("\r", "\n")
@@ -312,8 +334,13 @@ class MsgToMd:
         attachments = []
         inline_images = 0
         try:
-            for att in (getattr(msg, "attachments", []) or []):
-                name = getattr(att, "longFilename", None) or getattr(att, "shortFilename", None) or getattr(att, "filename", None) or "attachment"
+            for att in getattr(msg, "attachments", []) or []:
+                name = (
+                    getattr(att, "longFilename", None)
+                    or getattr(att, "shortFilename", None)
+                    or getattr(att, "filename", None)
+                    or "attachment"
+                )
                 attachments.append(str(name))
         except Exception:
             pass
@@ -328,7 +355,7 @@ class MsgToMd:
         ]
         md = "\n".join(header_block) + "\n\n" + body_md
 
-        meta: Dict[str, Any] = {
+        meta: dict[str, Any] = {
             "headers": {
                 "from": _norm_list(from_h),
                 "to": _norm_list(to_h),
@@ -351,7 +378,9 @@ class MsgToMd:
         doc_id = p.stem
         try:
             if MarkdownDoc is not None:
-                return MarkdownDoc(doc_id=doc_id, path=str(p), variant=None, lang=None, text_md=md, meta=meta)
+                return MarkdownDoc(
+                    doc_id=doc_id, path=str(p), variant=None, lang=None, text_md=md, meta=meta
+                )
             return type("_Doc", (), {"text_md": md, "meta": meta})()
         finally:
             try:
@@ -360,7 +389,7 @@ class MsgToMd:
             except Exception:
                 pass
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         """Return a static capability/configuration description for audit/telemetry.
 
         Returns:

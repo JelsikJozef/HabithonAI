@@ -1,7 +1,6 @@
-from typing import List, Optional
-
-
-def choose_language(requested: Optional[str], supported: List[str], fallback_lang: Optional[str]) -> Optional[str]:
+def choose_language(
+    requested: str | None, supported: list[str], fallback_lang: str | None
+) -> str | None:
     """Choose the language to use for analysis.
 
     Parameters
@@ -18,4 +17,6 @@ def choose_language(requested: Optional[str], supported: List[str], fallback_lan
         return requested or fallback_lang
     if requested and requested in supported:
         return requested
-    return fallback_lang if fallback_lang in supported else (supported[0] if supported else requested)
+    return (
+        fallback_lang if fallback_lang in supported else (supported[0] if supported else requested)
+    )

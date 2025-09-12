@@ -1,7 +1,6 @@
-import sqlite3
 import pytest
 
-from src.preprocessing.adapters.glossary.sqlite_glossary import SqliteGlossary, GlossaryError
+from src.preprocessing.adapters.glossary.sqlite_glossary import GlossaryError, SqliteGlossary
 
 
 def init_db(path):
@@ -33,7 +32,9 @@ def test_case_sensitivity_and_disable_boundaries(tmp_path):
     g.load("g1")
     assert g.apply("A word.", src_lang="cs", tgt_lang="en", mode="post", glossary_id="g1") == "A W."
     # Case-sensitive should not match here
-    assert g.apply("Inside", src_lang="cs", tgt_lang="en", mode="post", glossary_id="g1") == "Inside"
+    assert (
+        g.apply("Inside", src_lang="cs", tgt_lang="en", mode="post", glossary_id="g1") == "Inside"
+    )
 
 
 def test_regex_disabled_by_default_and_errors_when_enabled(tmp_path):

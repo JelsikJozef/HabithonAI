@@ -11,13 +11,14 @@ Capabilities:
 
 This module is content-agnostic and does not log text content. It reports only decisions and counts.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import re
-import sys
 import unicodedata
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
+from typing import Any
 
 __all__ = [
     "NormalizerOptions",
@@ -70,7 +71,7 @@ class NormalizerOptions:
     tab_width: int = 4
 
     trim_trailing_spaces: str = "safe"
-    collapse_blank_lines_to: Optional[int] = 2
+    collapse_blank_lines_to: int | None = 2
     ensure_final_newline: bool = True
 
     guard_code_fences: bool = True
@@ -111,10 +112,10 @@ class NormalizationReport:
     blank_lines_collapsed: int = 0
     final_newline_added: bool = False
 
-    protected_regions: Dict[str, int] = None  # type: ignore[assignment]
-    warnings: List[str] = None  # type: ignore[assignment]
+    protected_regions: dict[str, int] = None  # type: ignore[assignment]
+    warnings: list[str] = None  # type: ignore[assignment]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         # Ensure defaults for mutable fields
         if d["protected_regions"] is None:
@@ -148,7 +149,7 @@ class NormalizationError(RuntimeError):
 # -----------------------------
 
 
-def normalize_text(text: str, options: NormalizerOptions) -> Tuple[str, Dict[str, Any]]:
+def normalize_text(text: str, options: NormalizerOptions) -> tuple[str, dict[str, Any]]:
     """Normalize raw Markdown text according to the provided options.
 
     The function protects Markdown structures (fenced code, inline code, table
@@ -197,7 +198,7 @@ def normalize_text(text: str, options: NormalizerOptions) -> Tuple[str, Dict[str
     report.eol_before = _classify_eol(text)
 
     # Collect protected regions
-    protected_spans: List[Tuple[int, int, str]] = []
+    protected_spans: list[tuple[int, int, str]] = []
     if options.guard_code_fences:
         fences, unterminated = _find_fenced_code_spans(text)
         protected_spans.extend([(s, e, "code_fence") for s, e in fences])
@@ -220,7 +221,7 @@ def normalize_text(text: str, options: NormalizerOptions) -> Tuple[str, Dict[str
     report.unicode_form_before = _guess_unicode_form(text)
 
     # Transform unprotected slices
-    out_parts: List[str] = []
+    out_parts: list[str] = []
     last = 0
     for s, e, _kind in protected_spans:
         if s > last:
@@ -417,12 +418,12 @@ def _validate_options(o: NormalizerOptions) -> None:
         raise NormalizationError("invalid_option", "max_text_mb must be a positive integer")
 
 
-def _find_fenced_code_spans(text: str) -> Tuple[List[Tuple[int, int]], bool]:
+def _find_fenced_code_spans(text: str) -> tuple[list[tuple[int, int]], bool]:
     # Find fenced code blocks delimited by ``` or ~~~ with optional language tag.
     # Returns list of (start, end) spans including line endings of closing fence.
     open_re = re.compile(r"^(?P<fence>(`{3,}|~{3,})).*$", re.MULTILINE)
     unterminated = False
-    spans: List[Tuple[int, int]] = []
+    spans: list[tuple[int, int]] = []
     pos = 0
     n = len(text)
     while pos < n:
@@ -455,8 +456,8 @@ def _end_of_line_including_eol(text: str, idx_end_of_line_content: int) -> int:
     return i
 
 
-def _intervals_complement(length: int, spans: Sequence[Tuple[int, int]]) -> List[Tuple[int, int]]:
-    result: List[Tuple[int, int]] = []
+def _intervals_complement(length: int, spans: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    result: list[tuple[int, int]] = []
     last = 0
     for s, e in spans:
         if s > last:
@@ -467,10 +468,12 @@ def _intervals_complement(length: int, spans: Sequence[Tuple[int, int]]) -> List
     return result
 
 
-def _find_inline_code_spans(text: str, exclude: Sequence[Tuple[int, int, str]]) -> List[Tuple[int, int]]:
+def _find_inline_code_spans(
+    text: str, exclude: Sequence[tuple[int, int, str]]
+) -> list[tuple[int, int]]:
     # Find inline code spans delimited by backticks (`...`) with variable length.
     # Avoid ranges in exclude.
-    spans: List[Tuple[int, int]] = []
+    spans: list[tuple[int, int]] = []
     excluded = [(s, e) for s, e, _ in exclude]
     comp = _intervals_complement(len(text), excluded)
     # Pattern for inline code with n backticks as delimiter
@@ -482,15 +485,15 @@ def _find_inline_code_spans(text: str, exclude: Sequence[Tuple[int, int, str]]) 
     return spans
 
 
-_TABLE_HEADER_RE = re.compile(
-    r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$"
-)
+_TABLE_HEADER_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$")
 
 
-def _find_table_line_spans(text: str, exclude: Sequence[Tuple[int, int, str]]) -> List[Tuple[int, int]]:
+def _find_table_line_spans(
+    text: str, exclude: Sequence[tuple[int, int, str]]
+) -> list[tuple[int, int]]:
     # Protect lines that look like Markdown tables (contain '|' columns), including
     # header separators. Avoid ranges in exclude.
-    spans: List[Tuple[int, int]] = []
+    spans: list[tuple[int, int]] = []
     excluded = [(s, e) for s, e, _ in exclude]
     comp = _intervals_complement(len(text), excluded)
     for s, e in comp:
@@ -521,12 +524,12 @@ def _find_table_line_spans(text: str, exclude: Sequence[Tuple[int, int, str]]) -
     return spans
 
 
-def _merge_spans(spans: Sequence[Tuple[int, int, str]]) -> List[Tuple[int, int, str]]:
+def _merge_spans(spans: Sequence[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
     if not spans:
         return []
     # Sort by start, then by -end to ensure outer spans come first
     spans_sorted = sorted(spans, key=lambda t: (t[0], -t[1]))
-    merged: List[Tuple[int, int, str]] = []
+    merged: list[tuple[int, int, str]] = []
     cur_s, cur_e, cur_k = spans_sorted[0]
     for s, e, k in spans_sorted[1:]:
         if s <= cur_e:  # overlap or contiguous
@@ -544,13 +547,13 @@ def _merge_spans(spans: Sequence[Tuple[int, int, str]]) -> List[Tuple[int, int, 
 _CONTROL_CHAR_RE = re.compile(
     # All C0 controls except TAB (0x09) and LF/CR handled by EOL policy.
     """
-    [\x00-\x08\x0B\x0C\x0E-\x1F\x7F]
+    [\x00-\x08\x0b\x0c\x0e-\x1f\x7f]
     """,
     re.VERBOSE,
 )
 
 
-def _transform_chunk(chunk: str, options: NormalizerOptions) -> Tuple[str, Dict[str, int]]:
+def _transform_chunk(chunk: str, options: NormalizerOptions) -> tuple[str, dict[str, int]]:
     """Apply all transformations to a chunk and collect stats.
 
     Returns:
@@ -574,8 +577,9 @@ def _transform_chunk(chunk: str, options: NormalizerOptions) -> Tuple[str, Dict[
             chunk = chunk.replace("\n", "\r\n")
 
     # 2) Control characters removal (excluding TAB if kept)
-    def _remove_controls(s: str) -> Tuple[str, int]:
+    def _remove_controls(s: str) -> tuple[str, int]:
         removed = 0
+
         def repl(m: re.Match[str]) -> str:
             nonlocal removed
             ch = m.group(0)
@@ -583,6 +587,7 @@ def _transform_chunk(chunk: str, options: NormalizerOptions) -> Tuple[str, Dict[
                 return ch
             removed += 1
             return ""
+
         return _CONTROL_CHAR_RE.sub(repl, s), removed
 
     if options.strip_control_chars:
@@ -597,8 +602,8 @@ def _transform_chunk(chunk: str, options: NormalizerOptions) -> Tuple[str, Dict[
 
     # 4) NBSP handling
     if options.normalize_nbsp == "space":
-        if "\u00A0" in chunk:
-            chunk = chunk.replace("\u00A0", " ")
+        if "\u00a0" in chunk:
+            chunk = chunk.replace("\u00a0", " ")
 
     # 5) Unicode normalization
     if options.unicode_form in {"NFKC", "NFC"}:
@@ -625,7 +630,7 @@ def _transform_chunk(chunk: str, options: NormalizerOptions) -> Tuple[str, Dict[
         # We treat a blank line as a line that is empty after stripping spaces/tabs.
         lines = _split_preserve_endl(chunk)
         blank_run = 0
-        out: List[Tuple[str, str]] = []
+        out: list[tuple[str, str]] = []
         for ln, eol in lines:
             if ln.strip(" \t") == "":
                 blank_run += 1
@@ -647,9 +652,9 @@ def _expand_tabs(s: str, tab_width: int) -> str:
     return s.replace("\t", " " * tab_width)
 
 
-def _split_preserve_endl(s: str) -> List[Tuple[str, str]]:
+def _split_preserve_endl(s: str) -> list[tuple[str, str]]:
     # Split into (line_without_eol, eol) pairs; last line may have empty eol.
-    out: List[Tuple[str, str]] = []
+    out: list[tuple[str, str]] = []
     i = 0
     n = len(s)
     while i < n:

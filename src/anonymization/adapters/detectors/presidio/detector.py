@@ -1,18 +1,19 @@
 from __future__ import annotations
-from typing import Dict, List, Optional
+
 import importlib
 import logging
 
 from anonymization.app.config.pii_settings import PiiSettings
 from anonymization.domain.entities import PiiEntity
 from anonymization.domain.ports import DetectorPort
-from .engine_factory import resolve_models, build_analyzer
-from .registry_builder import configure_registry
-from .language_router import choose_language
+
+from .engine_factory import build_analyzer, resolve_models
 from .fallback_regex.detectors import detect_with_regex
-from .postprocess.spans import trim_whitespace
-from .postprocess.person import trim_person_entities
+from .language_router import choose_language
 from .postprocess.organization import trim_organization_entities
+from .postprocess.person import trim_person_entities
+from .postprocess.spans import trim_whitespace
+from .registry_builder import configure_registry
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +25,12 @@ class PresidioDetector(DetectorPort):
     RecognizerRegistry (predefined + custom + tuned SK/DE patterns), routes
     language selection, and applies minimal post-processing to spans.
     """
+
     name = "presidio"
 
-    def __init__(self, settings: Optional[PiiSettings] = None, languages: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self, settings: PiiSettings | None = None, languages: dict[str, str] | None = None
+    ) -> None:
         """Create a PresidioDetector from settings.
 
         Parameters
@@ -39,9 +43,9 @@ class PresidioDetector(DetectorPort):
             self.settings.language_models.update(languages)
 
         self._analyzer = None
-        self._supported_langs: List[str] = []
-        self._fallback_lang: Optional[str] = None
-        self._init_error: Optional[str] = None
+        self._supported_langs: list[str] = []
+        self._fallback_lang: str | None = None
+        self._init_error: str | None = None
 
         try:
             analyzer_mod = importlib.import_module("presidio_analyzer")
@@ -51,7 +55,9 @@ class PresidioDetector(DetectorPort):
             return
 
         try:
-            effective, disabled, fb_lang = resolve_models(self.settings.language_models, self.settings.fallback_model)
+            effective, disabled, fb_lang = resolve_models(
+                self.settings.language_models, self.settings.fallback_model
+            )
             self._supported_langs = sorted(effective.keys())
             self._fallback_lang = fb_lang
 
@@ -73,12 +79,12 @@ class PresidioDetector(DetectorPort):
             logger.warning("PresidioDetector initialization failed: %s", e)
             self._analyzer = None
 
-    def _fallback(self, text: str) -> List[PiiEntity]:
+    def _fallback(self, text: str) -> list[PiiEntity]:
         if self.settings.disable_regex_fallback:
             return []
         return detect_with_regex(text, detector_name=self.name)
 
-    def detect(self, text: str, language: Optional[str] = None) -> List[PiiEntity]:
+    def detect(self, text: str, language: str | None = None) -> list[PiiEntity]:
         """Detect PII entities in text.
 
         Parameters
@@ -107,11 +113,22 @@ class PresidioDetector(DetectorPort):
             else:
                 return self._fallback(text)
 
-        out: List[PiiEntity] = []
+        out: list[PiiEntity] = []
         for r in results:
             val = text[r.start : r.end]
-            score = float(getattr(r, "score", 0.0)) if getattr(r, "score", None) is not None else None
-            out.append(PiiEntity(type=str(r.entity_type), start=int(r.start), end=int(r.end), value=val, score=score, detector=self.name))
+            score = (
+                float(getattr(r, "score", 0.0)) if getattr(r, "score", None) is not None else None
+            )
+            out.append(
+                PiiEntity(
+                    type=str(r.entity_type),
+                    start=int(r.start),
+                    end=int(r.end),
+                    value=val,
+                    score=score,
+                    detector=self.name,
+                )
+            )
 
         # Post-process spans
         out = trim_whitespace(out, text)

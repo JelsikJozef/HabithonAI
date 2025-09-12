@@ -1,12 +1,10 @@
-import types
-import pytest
-
 from src.preprocessing.adapters.langid.fasttext_langid import FastTextLangId
 
 
 class DummyModel:
     def __init__(self, labels):
         self._labels = labels
+
     def predict(self, text, k=1):
         # Return first k labels and descending scores deterministically
         labs = [f"__label__{l}" for l in self._labels[:k]]
@@ -19,7 +17,9 @@ def test_preprocess_and_short_text_best_effort(monkeypatch):
     # Avoid importing fasttext; pretend loaded
     lid._loaded = True
     lid._model = DummyModel(["sk", "de"])  # type: ignore[attr-defined]
-    out, had_code = lid._preprocess_md("```\ncode\n``` text [lbl](http://x) ![alt](img) <b>html</b>")
+    out, had_code = lid._preprocess_md(
+        "```\ncode\n``` text [lbl](http://x) ![alt](img) <b>html</b>"
+    )
     # Code removed; tags stripped but inner text kept; link label and alt present
     assert "code" not in out
     assert "lbl" in out
@@ -30,7 +30,9 @@ def test_preprocess_and_short_text_best_effort(monkeypatch):
 
 
 def test_candidates_bias_and_predict(monkeypatch):
-    lid = FastTextLangId(model_path="/tmp/x.bin", candidates=["de", "sk"], max_chars=100, min_chars=1)
+    lid = FastTextLangId(
+        model_path="/tmp/x.bin", candidates=["de", "sk"], max_chars=100, min_chars=1
+    )
     lid._loaded = True
     lid._model = DummyModel(["fr", "de"])  # type: ignore[attr-defined]
     lang, conf = lid.detect("Bonjour and und", hints={"candidates": ["de", "sk"]})

@@ -49,7 +49,7 @@ Registry note
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 # Public constants for registry wiring
 EXTENSIONS: tuple[str, ...] = ("xlsx",)
@@ -83,16 +83,16 @@ class WorkbookRenderPlan:
         - Unknown or future fields should be ignored by callers.
     """
 
-    include: Optional[tuple[str, ...]]
-    exclude: Optional[tuple[str, ...]]
+    include: tuple[str, ...] | None
+    exclude: tuple[str, ...] | None
     include_hidden: bool
     header_rows: int
     render_mode: str
     bool_style: str
     merged_cells_policy: str
     newlines_as: str
-    max_rows: Optional[int]
-    max_cols: Optional[int]
+    max_rows: int | None
+    max_cols: int | None
     add_workbook_title: bool
     xls_support: bool
 
@@ -173,14 +173,14 @@ class XlsxToMd:
         self,
         *,
         xls_support: bool = False,
-        sheet_include: Optional[tuple[str, ...]] = None,
-        sheet_exclude: Optional[tuple[str, ...]] = None,
+        sheet_include: tuple[str, ...] | None = None,
+        sheet_exclude: tuple[str, ...] | None = None,
         include_hidden_sheets: bool = False,
         header_rows: int = 1,
         render_mode: str = "display",
         bool_style: str = "TRUE_FALSE",
-        max_rows: Optional[int] = None,
-        max_cols: Optional[int] = None,
+        max_rows: int | None = None,
+        max_cols: int | None = None,
         merged_cells_policy: str = "fill",
         cell_newlines_as: str = "br",
         add_workbook_title: bool = False,
@@ -199,7 +199,7 @@ class XlsxToMd:
         self._cell_newlines_as = str(cell_newlines_as)
         self._add_workbook_title = bool(add_workbook_title)
         self._strict_mode = bool(strict_mode)
-        self.supported_features: Dict[str, bool] = {
+        self.supported_features: dict[str, bool] = {
             "tables": True,
             "hyperlinks": True,
             "merged_cells": True,
@@ -218,9 +218,9 @@ class XlsxToMd:
           (controlled by header_rows). No advanced formatting or styles.
         - Sanitizes to LF newlines.
         """
-        from pathlib import Path
-        import zipfile
         import xml.etree.ElementTree as ET
+        import zipfile
+        from pathlib import Path
 
         try:
             from ...domain.models_markdown import MarkdownDoc
@@ -236,7 +236,11 @@ class XlsxToMd:
             raise FileNotFoundError(str(p))
 
         # Validate extension
-        ext = (getattr(raw, "ext", None) or (raw.get("ext") if isinstance(raw, dict) else p.suffix)).lower().lstrip(".")
+        ext = (
+            (getattr(raw, "ext", None) or (raw.get("ext") if isinstance(raw, dict) else p.suffix))
+            .lower()
+            .lstrip(".")
+        )
         if ext == "xls" and not self._xls_support:
             raise ValueError("Legacy .xls not supported (enable xls_support to allow)")
         if ext != "xlsx":
@@ -254,15 +258,15 @@ class XlsxToMd:
             for ch in col_ref:
                 if not ch.isalpha():
                     break
-                n = n * 26 + (ord(ch.upper()) - ord('A') + 1)
+                n = n * 26 + (ord(ch.upper()) - ord("A") + 1)
             return n - 1 if n > 0 else 0
 
         def _split_cell_ref(ref: str) -> tuple[int, int]:
             # Returns (row_index_0_based, col_index_0_based)
             if not ref:
                 return (0, 0)
-            letters = ''.join([c for c in ref if c.isalpha()])
-            digits = ''.join([c for c in ref if c.isdigit()])
+            letters = "".join([c for c in ref if c.isalpha()])
+            digits = "".join([c for c in ref if c.isdigit()])
             r = int(digits) - 1 if digits else 0
             c = _col_to_index(letters) if letters else 0
             return (r, c)
@@ -298,7 +302,9 @@ class XlsxToMd:
             rel_by_id: dict[str, str] = {}
             try:
                 rels_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
-                for rel in rels_root.findall(".//{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"):
+                for rel in rels_root.findall(
+                    ".//{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"
+                ):
                     rId = rel.attrib.get("Id")
                     target = rel.attrib.get("Target")
                     if rId and target:
@@ -322,7 +328,7 @@ class XlsxToMd:
             # Parse each sheet
             md_sections: list[str] = []
             per_sheet_meta: dict[str, dict] = {}
-            for (sheet_name, sheet_path) in sheets_info:
+            for sheet_name, sheet_path in sheets_info:
                 if sheet_path not in zf.namelist():
                     # Skip missing sheet file gracefully
                     continue
@@ -345,7 +351,7 @@ class XlsxToMd:
                     if t == "s":
                         # Shared string index
                         try:
-                            idx = int((v_el.text or "0")) if v_el is not None else 0
+                            idx = int(v_el.text or "0") if v_el is not None else 0
                         except ValueError:
                             idx = 0
                         text = shared_strings[idx] if 0 <= idx < len(shared_strings) else ""
@@ -359,7 +365,7 @@ class XlsxToMd:
                     r_i, c_i = _split_cell_ref(ref)
                     max_r = max(max_r, r_i)
                     max_c = max(max_c, c_i)
-                    val = (text or "")
+                    val = text or ""
                     grid[(r_i, c_i)] = val
                     if val.strip() != "":
                         # Track rightmost non-empty col per row
@@ -400,13 +406,19 @@ class XlsxToMd:
                     continue
 
                 # Build table rows (apply optional truncation)
-                max_rows_eff = min(rows_count, self._max_rows) if self._max_rows is not None else rows_count
-                max_cols_eff = min(cols_count, self._max_cols) if self._max_cols is not None else cols_count
+                max_rows_eff = (
+                    min(rows_count, self._max_rows) if self._max_rows is not None else rows_count
+                )
+                max_cols_eff = (
+                    min(cols_count, self._max_cols) if self._max_cols is not None else cols_count
+                )
                 table_rows: list[list[str]] = []
                 for r_i in range(0, max_rows_eff):
                     # For each row, determine this row's last used col (cap by max_cols_eff)
                     row_last_col = nonempty_cols_by_row.get(r_i, -1)
-                    eff_cols_this_row = min(max_cols_eff, row_last_col + 1) if row_last_col >= 0 else 0
+                    eff_cols_this_row = (
+                        min(max_cols_eff, row_last_col + 1) if row_last_col >= 0 else 0
+                    )
                     if eff_cols_this_row == 0:
                         # Entire row empty within used range; represent as empty row with current column count
                         # We'll handle header synthesis below.
@@ -417,7 +429,9 @@ class XlsxToMd:
                         # Escape pipe and backticks minimally
                         sval = str(val).replace("|", "\\|").replace("`", "\u0060")
                         if self._cell_newlines_as == "br":
-                            sval = sval.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+                            sval = (
+                                sval.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+                            )
                         row.append(sval)
                     # Pad short rows to max_cols_eff to keep table rectangular
                     if len(row) < max_cols_eff:
@@ -438,18 +452,24 @@ class XlsxToMd:
                 else:
                     # Synthesize headers as col_1..N based on effective columns
                     header = [f"col_{i+1}" for i in range(max_cols_eff)]
-                    data_start = 0 if header_rows == 0 else 1  # if header_rows>=1 but empty, we synthesized and keep all rows as data
+                    data_start = (
+                        0 if header_rows == 0 else 1
+                    )  # if header_rows>=1 but empty, we synthesized and keep all rows as data
 
                 # Markdown table assembly
                 md_lines: list[str] = [f"## {sheet_name}", ""]
                 md_lines.append("| " + " | ".join(header) + " |")
                 md_lines.append("| " + " | ".join(["---"] * len(header)) + " |")
                 for r in table_rows[data_start:]:
-                    md_lines.append("| " + " | ".join(r[:len(header)]) + " |")
+                    md_lines.append("| " + " | ".join(r[: len(header)]) + " |")
 
                 # Truncation note (relative to full sheet grid bounds)
-                truncated_rows = max(0, rows_count - (self._max_rows if self._max_rows is not None else rows_count))
-                truncated_cols = max(0, cols_count - (self._max_cols if self._max_cols is not None else cols_count))
+                truncated_rows = max(
+                    0, rows_count - (self._max_rows if self._max_rows is not None else rows_count)
+                )
+                truncated_cols = max(
+                    0, cols_count - (self._max_cols if self._max_cols is not None else cols_count)
+                )
 
                 # Per-sheet metadata summary
                 per_sheet_meta[sheet_name] = {
@@ -482,6 +502,7 @@ class XlsxToMd:
             # Build render plan metadata for audit
             try:
                 from dataclasses import asdict as _asdict
+
                 plan = WorkbookRenderPlan(
                     include=self._include,
                     exclude=self._exclude,
@@ -496,7 +517,7 @@ class XlsxToMd:
                     add_workbook_title=self._add_workbook_title,
                     xls_support=self._xls_support,
                 )
-                plan_dict: Dict[str, Any] = _asdict(plan)  # type: ignore[name-defined]
+                plan_dict: dict[str, Any] = _asdict(plan)  # type: ignore[name-defined]
             except Exception:
                 plan_dict = {
                     "include": self._include,
@@ -513,7 +534,7 @@ class XlsxToMd:
                     "xls_support": self._xls_support,
                 }
 
-            meta: Dict[str, Any] = {
+            meta: dict[str, Any] = {
                 "adapter": self.name,
                 "workbook_name": p.name,
                 "sheets": per_sheet_meta,
@@ -533,7 +554,7 @@ class XlsxToMd:
                 )
 
             class _Lite:
-                def __init__(self, text: str, meta: Dict[str, Any]):
+                def __init__(self, text: str, meta: dict[str, Any]):
                     self.text_md = text
                     self.meta = meta
 

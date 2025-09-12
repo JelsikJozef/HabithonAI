@@ -19,14 +19,15 @@ Behavioral guarantees:
 Note on Markdown: The caller must pass plain text segments only. This adapter
 never attempts to parse or preserve Markdown; it assumes it's already stripped.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
 import sqlite3
 import time
 import unicodedata
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any
 
 
 class GlossaryError(Exception):
@@ -40,7 +41,7 @@ class GlossaryError(Exception):
         details: Optional structured details for diagnostics.
     """
 
-    def __init__(self, code: str, message: str, *, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, code: str, message: str, *, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
@@ -130,11 +131,11 @@ class SqliteGlossary:
         self,
         db_path: str,
         *,
-        default_glossary_id: Optional[str] = None,
+        default_glossary_id: str | None = None,
         max_rules_per_call: int = 5000,
         regex_enabled: bool = False,
-        unicode_word_chars: Optional[str] = None,
-        normalization: Optional[Dict[str, Any]] = None,
+        unicode_word_chars: str | None = None,
+        normalization: dict[str, Any] | None = None,
         conflicts_policy: str = "priority",
         deterministic_order: bool = True,
     ) -> None:
@@ -155,12 +156,12 @@ class SqliteGlossary:
         self._conflicts_policy = conflicts_policy
         self._deterministic_order = deterministic_order
 
-        self._conn: Optional[sqlite3.Connection] = None
-        self._active_glossary_id: Optional[str] = None
+        self._conn: sqlite3.Connection | None = None
+        self._active_glossary_id: str | None = None
 
     # ---------------------------- Public API ----------------------------
 
-    def load(self, glossary_id: Optional[str] | None = None) -> None:
+    def load(self, glossary_id: str | None | None = None) -> None:
         """Open the SQLite database and validate schema.
 
         Parameters:
@@ -206,7 +207,7 @@ class SqliteGlossary:
         src_lang: str,
         tgt_lang: str,
         mode: str,
-        glossary_id: Optional[str] | None = None,
+        glossary_id: str | None | None = None,
     ) -> str:
         """Apply glossary rules to a plain text segment deterministically.
 
@@ -256,19 +257,25 @@ class SqliteGlossary:
         gid = glossary_id or self._active_glossary_id or self._default_glossary_id
         if gid is None:
             # No glossary configured; no-op as per spec (not an error)
-            return self._normalize_input(text) if self._normalization.get("normalize_input", True) else text
+            return (
+                self._normalize_input(text)
+                if self._normalization.get("normalize_input", True)
+                else text
+            )
 
         if self._conn is None:
             raise GlossaryError("DB_ERROR", "Adapter not loaded. Call load() first.")
 
         # Normalize input if configured
-        working = self._normalize_input(text) if self._normalization.get("normalize_input", True) else text
+        working = (
+            self._normalize_input(text)
+            if self._normalization.get("normalize_input", True)
+            else text
+        )
 
         # Fetch and order rules deterministically
         try:
-            rules = self._select_rules(
-                gid=gid, mode=mode, src_lang=src_lang, tgt_lang=tgt_lang
-            )
+            rules = self._select_rules(gid=gid, mode=mode, src_lang=src_lang, tgt_lang=tgt_lang)
         except GlossaryError:
             raise
         except Exception as ex:  # pragma: no cover - defensive
@@ -295,14 +302,14 @@ class SqliteGlossary:
         pattern: str,
         replacement: str,
         *,
-        src_lang: Optional[str] = None,
-        tgt_lang: Optional[str] = None,
+        src_lang: str | None = None,
+        tgt_lang: str | None = None,
         mode: str = "post",
         case_sensitive: bool = False,
         word_boundary: bool = True,
         priority: int = 100,
         enabled: bool = True,
-        notes: Optional[str] = None,
+        notes: str | None = None,
     ) -> int:
         """Insert a new glossary term into the database atomically.
 
@@ -341,8 +348,16 @@ class SqliteGlossary:
                         src_lang,
                         tgt_lang,
                         mode,
-                        self._normalize_rule(pattern) if self._normalization.get("normalize_rules", True) else pattern,
-                        self._normalize_rule(replacement) if self._normalization.get("normalize_rules", True) else replacement,
+                        (
+                            self._normalize_rule(pattern)
+                            if self._normalization.get("normalize_rules", True)
+                            else pattern
+                        ),
+                        (
+                            self._normalize_rule(replacement)
+                            if self._normalization.get("normalize_rules", True)
+                            else replacement
+                        ),
                         1 if case_sensitive else 0,
                         1 if word_boundary else 0,
                         int(priority),
@@ -408,12 +423,12 @@ class SqliteGlossary:
         self,
         glossary_id: str,
         *,
-        mode: Optional[str] = None,
-        src_lang: Optional[str] = None,
-        tgt_lang: Optional[str] = None,
+        mode: str | None = None,
+        src_lang: str | None = None,
+        tgt_lang: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List glossary terms filtered by glossary/languages/mode with paging.
 
         Parameters:
@@ -436,7 +451,7 @@ class SqliteGlossary:
         try:
             self._ensure_schema(expect_exists=True)
             clauses = ["glossary_id = ?"]
-            params: List[Any] = [glossary_id]
+            params: list[Any] = [glossary_id]
             if mode is not None:
                 clauses.append("mode = ?")
                 params.append(mode)
@@ -458,7 +473,7 @@ class SqliteGlossary:
         except Exception as ex:  # pragma: no cover
             raise GlossaryError("DB_ERROR", f"Failed to list terms: {ex}") from ex
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         """Return engine fingerprint and configuration for telemetry/reporting.
 
         Returns:
@@ -530,9 +545,7 @@ class SqliteGlossary:
         """
         conn = self._ensure_connection()
         try:
-            cur = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='terms'"
-            )
+            cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='terms'")
             row = cur.fetchone()
             if row is None:
                 if expect_exists:
@@ -588,13 +601,21 @@ class SqliteGlossary:
                     # Attempt to add missing columns when allowed
                     with conn:
                         if "case_sensitive" in missing:
-                            conn.execute("ALTER TABLE terms ADD COLUMN case_sensitive INTEGER NOT NULL DEFAULT 0")
+                            conn.execute(
+                                "ALTER TABLE terms ADD COLUMN case_sensitive INTEGER NOT NULL DEFAULT 0"
+                            )
                         if "word_boundary" in missing:
-                            conn.execute("ALTER TABLE terms ADD COLUMN word_boundary INTEGER NOT NULL DEFAULT 1")
+                            conn.execute(
+                                "ALTER TABLE terms ADD COLUMN word_boundary INTEGER NOT NULL DEFAULT 1"
+                            )
                         if "priority" in missing:
-                            conn.execute("ALTER TABLE terms ADD COLUMN priority INTEGER NOT NULL DEFAULT 100")
+                            conn.execute(
+                                "ALTER TABLE terms ADD COLUMN priority INTEGER NOT NULL DEFAULT 100"
+                            )
                         if "enabled" in missing:
-                            conn.execute("ALTER TABLE terms ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
+                            conn.execute(
+                                "ALTER TABLE terms ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"
+                            )
                         if "notes" in missing:
                             conn.execute("ALTER TABLE terms ADD COLUMN notes TEXT NULL")
                         # keep existing data intact
@@ -622,7 +643,7 @@ class SqliteGlossary:
         mode: str,
         src_lang: str,
         tgt_lang: str,
-    ) -> List[_Rule]:
+    ) -> list[_Rule]:
         """Select matching rules from the database and sort deterministically."""
         conn = self._ensure_connection()
 
@@ -656,7 +677,7 @@ class SqliteGlossary:
         except Exception as ex:  # pragma: no cover
             raise GlossaryError("DB_ERROR", f"Rule selection failed: {ex}") from ex
 
-        rules: List[_Rule] = []
+        rules: list[_Rule] = []
         for row in rows:
             pattern = row["pattern"]
             replacement = row["replacement"]
@@ -732,9 +753,9 @@ class SqliteGlossary:
         compiled = self._compile_pattern(pattern_text, case_sensitive=rule.case_sensitive)
 
         # Iterate matches left-to-right non-overlapping and build result
-        matches: List[Tuple[int, int]] = []
+        matches: list[tuple[int, int]] = []
         last_end = 0
-        new_parts: List[str] = []
+        new_parts: list[str] = []
 
         # We need to guard against catastrophic regex behavior when enabled.
         start_time = time.time()

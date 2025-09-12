@@ -17,8 +17,9 @@ raising vendor exceptions.
 
 import os
 import time
-from typing import Any, Iterable, Mapping, Optional, Protocol, TypedDict, runtime_checkable
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Protocol, TypedDict, runtime_checkable
 
 from preprocessing.domain.errors import (
     SettingsError,
@@ -36,7 +37,6 @@ from preprocessing.domain.ports import (
     TranslatePort,
     WriterContext,
 )
-
 
 # -----------------------------
 # Public typed shapes
@@ -56,11 +56,11 @@ class EnsureEnglishResult(TypedDict, total=False):
     """
 
     status: str
-    src_lang: Optional[str]
+    src_lang: str | None
     tgt_lang: str
-    written_path: Optional[str]
+    written_path: str | None
     meta: dict[str, Any]
-    error: Optional[dict[str, Any]]
+    error: dict[str, Any] | None
 
 
 class BatchEnglishResult(TypedDict, total=False):
@@ -107,8 +107,8 @@ class EnglishCfg(TypedDict, total=False):
 
     tgt_lang: str
     style: str
-    glossary_id: Optional[str]
-    max_segment_chars: Optional[int]
+    glossary_id: str | None
+    max_segment_chars: int | None
     strict: bool
     overwrite: bool
     dry_run: bool
@@ -135,9 +135,9 @@ class _PortsBundle(Protocol):
     langid: LanguageDetectPort
     translate: TranslatePort
     writer: MarkdownSerializerPort
-    glossary: Optional[GlossaryPort]
-    cache: Optional[CachePort]
-    writer_ctx: Optional[WriterContext]
+    glossary: GlossaryPort | None
+    cache: CachePort | None
+    writer_ctx: WriterContext | None
 
 
 # -----------------------------
@@ -160,7 +160,9 @@ def _resolve_writer_ctx(ports: _PortsBundle, cfg: Mapping[str, Any] | object) ->
     return ctx  # type: ignore[return-value]
 
 
-def _compute_target_paths(writer: MarkdownSerializerPort, ctx: WriterContext, doc: MarkdownDoc) -> TargetPaths:
+def _compute_target_paths(
+    writer: MarkdownSerializerPort, ctx: WriterContext, doc: MarkdownDoc
+) -> TargetPaths:
     # Plan-only; may raise WriteError which the caller will handle.
     return writer.compute_paths(doc, ctx)
 
@@ -174,7 +176,7 @@ def ensure_english_variant(
     doc: MarkdownDoc,
     ports: _PortsBundle,
     cfg: EnglishCfg | Mapping[str, Any] | object,
-    context: Optional[dict[str, Any]] = None,
+    context: dict[str, Any] | None = None,
 ) -> EnsureEnglishResult:
     """Create (or reuse) the English variant for one Markdown document.
 
@@ -261,8 +263,8 @@ def ensure_english_variant(
 
     # Language decision
     detect_ms = 0.0
-    src_lang: Optional[str] = (doc.lang.lower() if isinstance(doc.lang, str) else None)
-    detected_conf: Optional[float] = None
+    src_lang: str | None = doc.lang.lower() if isinstance(doc.lang, str) else None
+    detected_conf: float | None = None
     if not src_lang:
         try:
             t_detect = time.perf_counter()
@@ -284,9 +286,12 @@ def ensure_english_variant(
             }
 
     # Skip path for English
-    if (src_lang == "en") or (src_lang is not None and src_lang.lower() == "en") or (
-        src_lang is None and detected_conf is not None and detected_conf >= en_threshold
-    ) or (src_lang == "en" and (detected_conf is None or detected_conf >= en_threshold)):
+    if (
+        (src_lang == "en")
+        or (src_lang is not None and src_lang.lower() == "en")
+        or (src_lang is None and detected_conf is not None and detected_conf >= en_threshold)
+        or (src_lang == "en" and (detected_conf is None or detected_conf >= en_threshold))
+    ):
         # Plan-only is still useful to return the path. Optionally write/copy if not present.
         if dry_run:
             return {
@@ -326,8 +331,15 @@ def ensure_english_variant(
                     "written_path": wr.get("out_md_path", out_md_path),
                     "meta": {
                         "reason": "already_en",
-                        "writer": {"status": wr.get("status"), "sidecar_written": wr.get("sidecar_written", False)},
-                        "timings": {"detect_ms": detect_ms, "translate_ms": 0.0, "write_ms": write_ms},
+                        "writer": {
+                            "status": wr.get("status"),
+                            "sidecar_written": wr.get("sidecar_written", False),
+                        },
+                        "timings": {
+                            "detect_ms": detect_ms,
+                            "translate_ms": 0.0,
+                            "write_ms": write_ms,
+                        },
                     },
                 }
             except WriteError as e:
@@ -336,7 +348,9 @@ def ensure_english_variant(
                     "src_lang": src_lang or "en",
                     "tgt_lang": tgt_lang,
                     "written_path": None,
-                    "meta": {"timings": {"detect_ms": detect_ms, "translate_ms": 0.0, "write_ms": 0.0}},
+                    "meta": {
+                        "timings": {"detect_ms": detect_ms, "translate_ms": 0.0, "write_ms": 0.0}
+                    },
                     "error": e.to_dict(),
                 }
         # Not copying, just report plan
@@ -345,7 +359,10 @@ def ensure_english_variant(
             "src_lang": src_lang or "en",
             "tgt_lang": tgt_lang,
             "written_path": out_md_path,
-            "meta": {"reason": "already_en", "timings": {"detect_ms": detect_ms, "translate_ms": 0.0, "write_ms": 0.0}},
+            "meta": {
+                "reason": "already_en",
+                "timings": {"detect_ms": detect_ms, "translate_ms": 0.0, "write_ms": 0.0},
+            },
         }
 
     # Translation path
@@ -375,7 +392,11 @@ def ensure_english_variant(
             "written_path": None,
             "meta": {
                 "engine": getattr(ports.translate, "capabilities", lambda: {})(),
-                "timings": {"detect_ms": detect_ms, "translate_ms": translate_ms, "write_ms": write_ms},
+                "timings": {
+                    "detect_ms": detect_ms,
+                    "translate_ms": translate_ms,
+                    "write_ms": write_ms,
+                },
             },
             "error": e.to_dict(),
         }
@@ -390,8 +411,17 @@ def ensure_english_variant(
                     "src_lang": src_lang,
                     "tgt_lang": tgt_lang,
                     "written_path": None,
-                    "meta": {"timings": {"detect_ms": detect_ms, "translate_ms": translate_ms, "write_ms": 0.0}},
-                    "error": {"code": "invalid_variant", "message": f"expected variant 'english', got '{en_doc.variant}'"},
+                    "meta": {
+                        "timings": {
+                            "detect_ms": detect_ms,
+                            "translate_ms": translate_ms,
+                            "write_ms": 0.0,
+                        }
+                    },
+                    "error": {
+                        "code": "invalid_variant",
+                        "message": f"expected variant 'english', got '{en_doc.variant}'",
+                    },
                 }
             # non-strict: coerce for writing
             en_doc = en_doc.copy_with(variant="english")
@@ -402,8 +432,17 @@ def ensure_english_variant(
                     "src_lang": src_lang,
                     "tgt_lang": tgt_lang,
                     "written_path": None,
-                    "meta": {"timings": {"detect_ms": detect_ms, "translate_ms": translate_ms, "write_ms": 0.0}},
-                    "error": {"code": "invalid_lang", "message": f"expected lang 'en', got '{en_doc.lang}'"},
+                    "meta": {
+                        "timings": {
+                            "detect_ms": detect_ms,
+                            "translate_ms": translate_ms,
+                            "write_ms": 0.0,
+                        }
+                    },
+                    "error": {
+                        "code": "invalid_lang",
+                        "message": f"expected lang 'en', got '{en_doc.lang}'",
+                    },
                 }
             en_doc = en_doc.copy_with(lang="en")
     except ValueError as e:
@@ -412,7 +451,9 @@ def ensure_english_variant(
             "src_lang": src_lang,
             "tgt_lang": tgt_lang,
             "written_path": None,
-            "meta": {"timings": {"detect_ms": detect_ms, "translate_ms": translate_ms, "write_ms": 0.0}},
+            "meta": {
+                "timings": {"detect_ms": detect_ms, "translate_ms": translate_ms, "write_ms": 0.0}
+            },
             "error": {"code": "invalid_markdown_doc", "message": str(e)},
         }
 
@@ -428,7 +469,11 @@ def ensure_english_variant(
                 "meta": {
                     "engine": getattr(ports.translate, "capabilities", lambda: {})(),
                     "glossary_id": glossary_id,
-                    "timings": {"detect_ms": detect_ms, "translate_ms": translate_ms, "write_ms": 0.0},
+                    "timings": {
+                        "detect_ms": detect_ms,
+                        "translate_ms": translate_ms,
+                        "write_ms": 0.0,
+                    },
                     "dry_run": True,
                 },
             }
@@ -438,7 +483,13 @@ def ensure_english_variant(
                 "src_lang": src_lang,
                 "tgt_lang": tgt_lang,
                 "written_path": None,
-                "meta": {"timings": {"detect_ms": detect_ms, "translate_ms": translate_ms, "write_ms": 0.0}},
+                "meta": {
+                    "timings": {
+                        "detect_ms": detect_ms,
+                        "translate_ms": translate_ms,
+                        "write_ms": 0.0,
+                    }
+                },
                 "error": e.to_dict(),
             }
 
@@ -454,9 +505,16 @@ def ensure_english_variant(
             "written_path": wr.get("out_md_path", out_md_path),
             "meta": {
                 "engine": getattr(ports.translate, "capabilities", lambda: {})(),
-                "writer": {"status": wr.get("status"), "sidecar_written": wr.get("sidecar_written", False)},
+                "writer": {
+                    "status": wr.get("status"),
+                    "sidecar_written": wr.get("sidecar_written", False),
+                },
                 "glossary_id": glossary_id,
-                "timings": {"detect_ms": detect_ms, "translate_ms": translate_ms, "write_ms": write_ms},
+                "timings": {
+                    "detect_ms": detect_ms,
+                    "translate_ms": translate_ms,
+                    "write_ms": write_ms,
+                },
             },
         }
     except WriteError as e:
@@ -465,11 +523,19 @@ def ensure_english_variant(
             "src_lang": src_lang,
             "tgt_lang": tgt_lang,
             "written_path": None,
-            "meta": {"timings": {"detect_ms": detect_ms, "translate_ms": translate_ms, "write_ms": write_ms}},
+            "meta": {
+                "timings": {
+                    "detect_ms": detect_ms,
+                    "translate_ms": translate_ms,
+                    "write_ms": write_ms,
+                }
+            },
             "error": e.to_dict(),
         }
     finally:
-        _ = (time.perf_counter() - t0) * 1000.0  # total time measured but not returned explicitly (kept local)
+        _ = (
+            time.perf_counter() - t0
+        ) * 1000.0  # total time measured but not returned explicitly (kept local)
 
 
 # -----------------------------
@@ -481,7 +547,7 @@ def ensure_english_for_batch(
     docs: Iterable[MarkdownDoc],
     ports: _PortsBundle,
     cfg: EnglishCfg | Mapping[str, Any] | object,
-    context: Optional[dict[str, Any]] = None,
+    context: dict[str, Any] | None = None,
 ) -> BatchEnglishResult:
     """Orchestrate creation of the English variant for many documents.
 
@@ -542,7 +608,10 @@ def ensure_english_for_batch(
                         "tgt_lang": (_cfg_get(cfg, "tgt_lang", "en") or "en").lower(),
                         "written_path": None,
                         "meta": {"error": "skipped_due_to_fail_fast"},
-                        "error": {"code": "short_circuited", "message": "fail_fast: skipped remaining items"},
+                        "error": {
+                            "code": "short_circuited",
+                            "message": "fail_fast: skipped remaining items",
+                        },
                     }
                 cancelled = True
                 break
@@ -555,7 +624,9 @@ def ensure_english_for_batch(
                 fut = futures[i]
                 try:
                     idx, res = fut.result()
-                except Exception as e:  # Guardrail: convert unexpected errors to domain-like failure
+                except (
+                    Exception
+                ) as e:  # Guardrail: convert unexpected errors to domain-like failure
                     res = {
                         "status": "failed",
                         "src_lang": None,
@@ -575,7 +646,10 @@ def ensure_english_for_batch(
                             "tgt_lang": (_cfg_get(cfg, "tgt_lang", "en") or "en").lower(),
                             "written_path": None,
                             "meta": {"error": "skipped_due_to_fail_fast"},
-                            "error": {"code": "short_circuited", "message": "fail_fast: skipped remaining items"},
+                            "error": {
+                                "code": "short_circuited",
+                                "message": "fail_fast: skipped remaining items",
+                            },
                         }
                     cancelled = True
                     break

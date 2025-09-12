@@ -1,7 +1,8 @@
 from __future__ import annotations
-from typing import Optional
+
 import json
 import logging
+
 from ..presidio.engine_factory import build_analyzer  # noqa: F401  # only for types in editors
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ def configure_registry(registry, settings, analyzer_mod) -> None:
     # Custom patterns via JSON path
     if getattr(settings, "custom_patterns_path", None):
         try:
-            with open(settings.custom_patterns_path, "r", encoding="utf-8") as f:
+            with open(settings.custom_patterns_path, encoding="utf-8") as f:
                 data = json.load(f)
             items = data if isinstance(data, list) else data.get("recognizers", [])
             for rec in items:
@@ -47,38 +48,64 @@ def configure_registry(registry, settings, analyzer_mod) -> None:
                         score = float(p.get("score", 0.5))
                         if not regex:
                             continue
-                        pat_objs.append(Pattern(name=p.get("name", f"pat{i}"), regex=regex, score=score))
+                        pat_objs.append(
+                            Pattern(name=p.get("name", f"pat{i}"), regex=regex, score=score)
+                        )
                     if entity and pat_objs:
-                        registry.add_recognizer(PatternRecognizer(
-                            supported_entity=entity,
-                            name=name,
-                            patterns=pat_objs,
-                            context=ctx,
-                            supported_language=lang,
-                        ))
+                        registry.add_recognizer(
+                            PatternRecognizer(
+                                supported_entity=entity,
+                                name=name,
+                                patterns=pat_objs,
+                                context=ctx,
+                                supported_language=lang,
+                            )
+                        )
                 except Exception as e:
                     logger.warning("Presidio: failed to register custom recognizer: %s", e)
         except Exception as e:
-            logger.warning("Presidio: failed to load patterns file '%s': %s", settings.custom_patterns_path, e)
+            logger.warning(
+                "Presidio: failed to load patterns file '%s': %s", settings.custom_patterns_path, e
+            )
 
     # Slovak specific recognizers
     try:
         # Slovak national ID
-        registry.add_recognizer(PatternRecognizer(
-            supported_entity="SK_NATIONAL_ID",
-            name="SkNationalIdRecognizer",
-            patterns=[Pattern(name="sk_national_id", regex=r"\b\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\/?\d{3,4}\b", score=0.7)],
-            context=["rodné", "rodne", "číslo", "cislo", "r.č", "r.c", "rc", "rodné číslo", "rodne cislo"],
-            supported_language="sk",
-        ))
+        registry.add_recognizer(
+            PatternRecognizer(
+                supported_entity="SK_NATIONAL_ID",
+                name="SkNationalIdRecognizer",
+                patterns=[
+                    Pattern(
+                        name="sk_national_id",
+                        regex=r"\b\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\/?\d{3,4}\b",
+                        score=0.7,
+                    )
+                ],
+                context=[
+                    "rodné",
+                    "rodne",
+                    "číslo",
+                    "cislo",
+                    "r.č",
+                    "r.c",
+                    "rc",
+                    "rodné číslo",
+                    "rodne cislo",
+                ],
+                supported_language="sk",
+            )
+        )
         # Slovak postal code
-        registry.add_recognizer(PatternRecognizer(
-            supported_entity="SK_POSTAL_CODE",
-            name="SkPostalCodeRecognizer",
-            patterns=[Pattern(name="sk_postal_code", regex=r"\b\d{3}\s?\d{2}\b", score=0.5)],
-            context=["PSČ", "psc", "poštové", "postove", "smerovacie", "pošta", "posta"],
-            supported_language="sk",
-        ))
+        registry.add_recognizer(
+            PatternRecognizer(
+                supported_entity="SK_POSTAL_CODE",
+                name="SkPostalCodeRecognizer",
+                patterns=[Pattern(name="sk_postal_code", regex=r"\b\d{3}\s?\d{2}\b", score=0.5)],
+                context=["PSČ", "psc", "poštové", "postove", "smerovacie", "pošta", "posta"],
+                supported_language="sk",
+            )
+        )
         # Slovak person name anchored to salutations/titles; raised score
         sk_person_regex = (
             r"\b(?:P[áa]n|p[áa]n|Pani|pani|Slečna|slečna|Slecna|slecna)"  # salutation
@@ -86,13 +113,21 @@ def configure_registry(registry, settings, analyzer_mod) -> None:
             r"[A-ZÁÄČĎÉÍĹĽŇÓÔŔŠŤÚÝŽ][a-záäčďéíĺľňóôŕšťúýž]+"  # first name
             r"(?:[-\s][A-ZÁÄČĎÉÍĹĽŇÓÔŔŠŤÚÝŽ][a-záäčďéíĺľňóôŕšťúýž]+)+\b"  # last (and possibly middle) names
         )
-        registry.add_recognizer(PatternRecognizer(
-            supported_entity="PERSON",
-            name="SkPersonNameRecognizer",
-            patterns=[Pattern(name="sk_person_name", regex=sk_person_regex, score=float(getattr(settings, "person_score_sk", 0.8)))],
-            context=list(getattr(settings, "person_context_sk", [])),
-            supported_language="sk",
-        ))
+        registry.add_recognizer(
+            PatternRecognizer(
+                supported_entity="PERSON",
+                name="SkPersonNameRecognizer",
+                patterns=[
+                    Pattern(
+                        name="sk_person_name",
+                        regex=sk_person_regex,
+                        score=float(getattr(settings, "person_score_sk", 0.8)),
+                    )
+                ],
+                context=list(getattr(settings, "person_context_sk", [])),
+                supported_language="sk",
+            )
+        )
     except Exception as e:
         logger.warning("Presidio: failed adding Slovak recognizers: %s", e)
 
@@ -104,25 +139,35 @@ def configure_registry(registry, settings, analyzer_mod) -> None:
             r"(?:\s+(?:&|Co\.|[A-ZÄÖÜ][\w'’\-\.äöüÄÖÜß]*))*"  # additional tokens
             r"\s+(?:GmbH(?:\s*&\s*Co\.?\s*KG)?|AG|KG|OHG|UG|GbR|e\.V\.|e\.K\.)\b"
         )
-        registry.add_recognizer(PatternRecognizer(
-            supported_entity="ORGANIZATION",
-            name="DeCompanyRecognizer",
-            patterns=[Pattern(name="de_company_suffix", regex=de_org_regex, score=0.6)],
-            context=["Firma", "Unternehmen", "Gesellschaft", "AG", "GmbH"],
-            supported_language="de",
-        ))
+        registry.add_recognizer(
+            PatternRecognizer(
+                supported_entity="ORGANIZATION",
+                name="DeCompanyRecognizer",
+                patterns=[Pattern(name="de_company_suffix", regex=de_org_regex, score=0.6)],
+                context=["Firma", "Unternehmen", "Gesellschaft", "AG", "GmbH"],
+                supported_language="de",
+            )
+        )
         # German person name anchored to salutations/titles; raised score
         de_person_regex = (
             r"\b(?:Herrn?|Hr\.?|Frau|Fr\.?)"  # salutation
             r"\s+(?:(?:Dr\.|Prof\.|Dipl\.-Ing\.)\s+)*"  # optional titles
             r"[A-ZÄÖÜ][a-zäöüß]+(?:[-\s][A-ZÄÖÜ][a-zäöüß]+)+\b"
         )
-        registry.add_recognizer(PatternRecognizer(
-            supported_entity="PERSON",
-            name="DePersonNameRecognizer",
-            patterns=[Pattern(name="de_person_name", regex=de_person_regex, score=float(getattr(settings, "person_score_de", 0.8)))],
-            context=list(getattr(settings, "person_context_de", [])),
-            supported_language="de",
-        ))
+        registry.add_recognizer(
+            PatternRecognizer(
+                supported_entity="PERSON",
+                name="DePersonNameRecognizer",
+                patterns=[
+                    Pattern(
+                        name="de_person_name",
+                        regex=de_person_regex,
+                        score=float(getattr(settings, "person_score_de", 0.8)),
+                    )
+                ],
+                context=list(getattr(settings, "person_context_de", [])),
+                supported_language="de",
+            )
+        )
     except Exception as e:
         logger.warning("Presidio: failed adding German recognizers: %s", e)

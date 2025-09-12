@@ -1,0 +1,7 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".git", "build", "dist", ".venv", "migrations"]
+
+# Optionally enable formatting integration
+fix = true

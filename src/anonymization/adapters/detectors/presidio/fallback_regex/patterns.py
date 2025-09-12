@@ -1,7 +1,9 @@
 import re
 
 EMAIL_RE = re.compile(r"(?P<email>[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
-PHONE_RE = re.compile(r"(?P<phone>(?:\+\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]?)?\d{3,4}[\s-]?\d{3,4})")
+PHONE_RE = re.compile(
+    r"(?P<phone>(?:\+\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s-]?)?\d{3,4}[\s-]?\d{3,4})"
+)
 IPV4_RE = re.compile(r"(?P<ip>\b(?:\d{1,3}\.){3}\d{1,3}\b)")
 CREDIT_CARD_RE = re.compile(r"(?P<cc>\b(?:\d[ -]*?){13,19}\b)")
 

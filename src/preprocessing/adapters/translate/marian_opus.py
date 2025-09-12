@@ -33,13 +33,14 @@ translatable segments and recombine translations back into the original
 Markdown, preserving code blocks, inline code, link/image destinations, and
 layout delimiters.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+import hashlib
 import os
 import time
-import hashlib
+from dataclasses import dataclass
+from typing import Any
 
 from preprocessing.domain.errors import TranslationError
 from preprocessing.domain.models_markdown import MarkdownDoc
@@ -81,12 +82,12 @@ class _DecodingConfig:
     length_penalty: float
     max_batch_size: int
     max_new_tokens: int
-    no_repeat_ngram_size: Optional[int]
+    no_repeat_ngram_size: int | None
     device: str
     dtype: str
-    seed: Optional[int]
+    seed: int | None
     local_files_only: bool
-    hf_cache_dir: Optional[str]
+    hf_cache_dir: str | None
 
 
 class MarianOpus(TranslatePort):
@@ -114,7 +115,7 @@ class MarianOpus(TranslatePort):
 
     def __init__(
         self,
-        models: Dict[str, str],
+        models: dict[str, str],
         *,
         device: str = "cpu",
         dtype: str = "auto",
@@ -122,15 +123,15 @@ class MarianOpus(TranslatePort):
         length_penalty: float = 1.0,
         max_batch_size: int = 16,
         max_new_tokens: int = 256,
-        no_repeat_ngram_size: Optional[int] = None,
-        segmenter_options: Optional[Dict[str, Any]] = None,
+        no_repeat_ngram_size: int | None = None,
+        segmenter_options: dict[str, Any] | None = None,
         glossary_mode: str = "none",
         cache_enabled: bool = True,
-        seed: Optional[int] = None,
+        seed: int | None = None,
         local_files_only: bool = True,
-        hf_cache_dir: Optional[str] = None,
-        glossary: Optional[GlossaryPort] = None,
-        cache: Optional[CachePort] = None,
+        hf_cache_dir: str | None = None,
+        glossary: GlossaryPort | None = None,
+        cache: CachePort | None = None,
         segmenter: Any | None = None,
     ) -> None:
         """Construct a Marian OPUS adapter with lazy per-language loading.
@@ -185,7 +186,7 @@ class MarianOpus(TranslatePort):
                 {"reason": "SETTINGS", "message": "models mapping is required and non-empty"},
             )
 
-        self._models: Dict[str, str] = {k.lower(): v for k, v in models.items()}
+        self._models: dict[str, str] = {k.lower(): v for k, v in models.items()}
         self._segmenter_options = dict(segmenter_options or {})
         self._glossary_mode = str(glossary_mode)
         self._cache_enabled = bool(cache_enabled)
@@ -198,7 +199,9 @@ class MarianOpus(TranslatePort):
             length_penalty=float(length_penalty),
             max_batch_size=int(max_batch_size),
             max_new_tokens=int(max_new_tokens),
-            no_repeat_ngram_size=int(no_repeat_ngram_size) if no_repeat_ngram_size is not None else None,
+            no_repeat_ngram_size=(
+                int(no_repeat_ngram_size) if no_repeat_ngram_size is not None else None
+            ),
             device=str(device),
             dtype=str(dtype),
             seed=int(seed) if seed is not None else None,
@@ -207,7 +210,7 @@ class MarianOpus(TranslatePort):
         )
 
         # Lazy-loaded engines per src language: src -> {"tokenizer", "model", "fingerprint", "model_id"}
-        self._engines: Dict[str, Dict[str, Any]] = {}
+        self._engines: dict[str, dict[str, Any]] = {}
 
     # -----------------------------
     # Lifecycle
@@ -251,17 +254,25 @@ class MarianOpus(TranslatePort):
         except Exception as exc:  # pragma: no cover - environment specific
             raise TranslationError(
                 "model not available",
-                {"reason": "MODEL_NOT_FOUND", "message": "transformers not installed", "details": exc.__class__.__name__},
+                {
+                    "reason": "MODEL_NOT_FOUND",
+                    "message": "transformers not installed",
+                    "details": exc.__class__.__name__,
+                },
             )
         try:
             import torch  # type: ignore
         except Exception as exc:  # pragma: no cover
             raise TranslationError(
                 "model not available",
-                {"reason": "MODEL_NOT_FOUND", "message": "torch not installed", "details": exc.__class__.__name__},
+                {
+                    "reason": "MODEL_NOT_FOUND",
+                    "message": "torch not installed",
+                    "details": exc.__class__.__name__,
+                },
             )
 
-        load_kwargs: Dict[str, Any] = {
+        load_kwargs: dict[str, Any] = {
             "local_files_only": bool(self._eng.local_files_only),
         }
         if self._eng.hf_cache_dir:
@@ -273,12 +284,21 @@ class MarianOpus(TranslatePort):
         except OSError as exc:
             raise TranslationError(
                 "tokenizer not available",
-                {"reason": "TOKENIZER_LOAD_FAILED", "message": "failed to load tokenizer", "model": model_id, "details": str(exc)},
+                {
+                    "reason": "TOKENIZER_LOAD_FAILED",
+                    "message": "failed to load tokenizer",
+                    "model": model_id,
+                    "details": str(exc),
+                },
             )
         except Exception as exc:  # pragma: no cover
             raise TranslationError(
                 "tokenizer not available",
-                {"reason": "TOKENIZER_LOAD_FAILED", "message": exc.__class__.__name__, "model": model_id},
+                {
+                    "reason": "TOKENIZER_LOAD_FAILED",
+                    "message": exc.__class__.__name__,
+                    "model": model_id,
+                },
             )
 
         # Model
@@ -287,7 +307,12 @@ class MarianOpus(TranslatePort):
         except OSError as exc:
             raise TranslationError(
                 "model not available",
-                {"reason": "MODEL_NOT_FOUND", "message": "failed to load model", "model": model_id, "details": str(exc)},
+                {
+                    "reason": "MODEL_NOT_FOUND",
+                    "message": "failed to load model",
+                    "model": model_id,
+                    "details": str(exc),
+                },
             )
         except Exception as exc:  # pragma: no cover
             raise TranslationError(
@@ -310,7 +335,12 @@ class MarianOpus(TranslatePort):
         except Exception as exc:  # pragma: no cover
             raise TranslationError(
                 "model not available",
-                {"reason": "MODEL_NOT_FOUND", "message": "failed to initialize model on device", "device": self._eng.device, "details": exc.__class__.__name__},
+                {
+                    "reason": "MODEL_NOT_FOUND",
+                    "message": "failed to initialize model on device",
+                    "device": self._eng.device,
+                    "details": exc.__class__.__name__,
+                },
             )
 
         # Fingerprint per-language engine
@@ -341,9 +371,9 @@ class MarianOpus(TranslatePort):
         doc: MarkdownDoc,
         src_lang: str,
         tgt_lang: str,
-        options: Optional[dict[str, Any]] = None,
+        options: dict[str, Any] | None = None,
         *,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> MarkdownDoc:
         """Translate Markdown text nodes to English while preserving structure.
 
@@ -391,11 +421,13 @@ class MarianOpus(TranslatePort):
 
         src = src_lang.lower()
         if src not in self._models:
-            raise TranslationError("unsupported language pair", {"reason": "UNSUPPORTED_LANG", "src": src, "tgt": "en"})
+            raise TranslationError(
+                "unsupported language pair", {"reason": "UNSUPPORTED_LANG", "src": src, "tgt": "en"}
+            )
 
         # Merge options and segmenter options
         opts = dict(options or {})
-        glossary_id: Optional[str] = opts.get("glossary_id")
+        glossary_id: str | None = opts.get("glossary_id")
         seg_opts = dict(self._segmenter_options)
         if "max_segment_chars" in opts and opts["max_segment_chars"] is not None:
             seg_opts["segment_max_chars"] = int(opts["max_segment_chars"])  # alias
@@ -414,11 +446,18 @@ class MarianOpus(TranslatePort):
         # 1) Segment Markdown (no model load yet)
         t_seg0 = time.perf_counter()
         try:
-            segments, plan = (self._segmenter or mdseg).extract_segments(doc.text_md, options=seg_opts)
+            segments, plan = (self._segmenter or mdseg).extract_segments(
+                doc.text_md, options=seg_opts
+            )
         except mdseg.SegmentationError as exc:
-            raise TranslationError("segmentation failed", {"reason": "SEGMENT_FAILED", "message": str(exc)})
+            raise TranslationError(
+                "segmentation failed", {"reason": "SEGMENT_FAILED", "message": str(exc)}
+            )
         except Exception as exc:
-            raise TranslationError("segmentation failed", {"reason": "SEGMENT_FAILED", "message": exc.__class__.__name__})
+            raise TranslationError(
+                "segmentation failed",
+                {"reason": "SEGMENT_FAILED", "message": exc.__class__.__name__},
+            )
         t_seg1 = time.perf_counter()
 
         # Nothing to translate
@@ -465,7 +504,9 @@ class MarianOpus(TranslatePort):
                         text, src_lang=src, tgt_lang="en", mode="pre", glossary_id=glossary_id
                     )
                 except Exception as exc:
-                    raise TranslationError("glossary failed", {"reason": "GLOSSARY_FAILED", "message": str(exc)})
+                    raise TranslationError(
+                        "glossary failed", {"reason": "GLOSSARY_FAILED", "message": str(exc)}
+                    )
             return text
 
         # 2) Cache + plan misses (before loading heavy model)
@@ -473,12 +514,12 @@ class MarianOpus(TranslatePort):
         total = len(segments)
         cached = 0
         batched_calls = 0
-        translated_map: Dict[str, str] = {}
-        to_translate: List[Tuple[str, str]] = []  # (seg_id, preprocessed_text)
+        translated_map: dict[str, str] = {}
+        to_translate: list[tuple[str, str]] = []  # (seg_id, preprocessed_text)
 
         for seg in segments:
             inp = _glossary_pre(seg.text)
-            cache_val: Optional[str] = None
+            cache_val: str | None = None
             if self._cache and self._cache_enabled:
                 key = self._make_cache_key(inp, src, "en", engine_key, glossary_id)
                 try:
@@ -502,18 +543,20 @@ class MarianOpus(TranslatePort):
             engine = self._engines[src]
             tokenizer = engine["tokenizer"]
             # We avoid truncation; split conservatively by sentences/words.
-            batch_texts: List[str] = []
-            batch_owner: List[str] = []  # original seg id
+            batch_texts: list[str] = []
+            batch_owner: list[str] = []  # original seg id
 
             for seg_id, text in to_translate:
-                parts = self._split_by_tokens(tokenizer, text, max_tokens_input=self._estimate_input_budget(tokenizer))
+                parts = self._split_by_tokens(
+                    tokenizer, text, max_tokens_input=self._estimate_input_budget(tokenizer)
+                )
                 for p in parts:
                     batch_texts.append(p)
                     batch_owner.append(seg_id)
 
             # Execute in fixed-size batches
-            out_texts: List[str] = []
-            out_owner: List[str] = []
+            out_texts: list[str] = []
+            out_owner: list[str] = []
             for i in range(0, len(batch_texts), self._eng.max_batch_size):
                 sl = slice(i, min(i + self._eng.max_batch_size, len(batch_texts)))
                 chunk_inputs = batch_texts[sl]
@@ -525,14 +568,18 @@ class MarianOpus(TranslatePort):
                 except Exception as exc:
                     raise TranslationError(
                         "batch failed",
-                        {"reason": "BATCH_GENERATION_FAILED", "message": str(exc.__class__.__name__), "count": len(chunk_inputs)},
+                        {
+                            "reason": "BATCH_GENERATION_FAILED",
+                            "message": str(exc.__class__.__name__),
+                            "count": len(chunk_inputs),
+                        },
                     )
                 out_texts.extend(chunk_outputs)
                 out_owner.extend(chunk_owner)
                 batched_calls += 1
 
             # Reassemble subparts into full segment translations, apply post-glossary, and cache
-            per_seg: Dict[str, List[str]] = {}
+            per_seg: dict[str, list[str]] = {}
             for sid, txt in zip(out_owner, out_texts):
                 per_seg.setdefault(sid, []).append(txt)
 
@@ -541,9 +588,13 @@ class MarianOpus(TranslatePort):
                 # Post-glossary
                 if self._glossary and self._glossary_mode in {"post", "both"}:
                     try:
-                        full = self._glossary.apply(full, src_lang=src, tgt_lang="en", mode="post", glossary_id=glossary_id)
+                        full = self._glossary.apply(
+                            full, src_lang=src, tgt_lang="en", mode="post", glossary_id=glossary_id
+                        )
                     except Exception as exc:
-                        raise TranslationError("glossary failed", {"reason": "GLOSSARY_FAILED", "message": str(exc)})
+                        raise TranslationError(
+                            "glossary failed", {"reason": "GLOSSARY_FAILED", "message": str(exc)}
+                        )
                 translated_map[sid] = full
                 # Cache store
                 if self._cache and self._cache_enabled:
@@ -556,19 +607,32 @@ class MarianOpus(TranslatePort):
         t_tr1 = time.perf_counter()
 
         # 4) Recombine into Markdown
-        translated_items = [{"id": sid, "text": translated_map[sid]} for sid in (e.id for e in segments)]
+        translated_items = [
+            {"id": sid, "text": translated_map[sid]} for sid in (e.id for e in segments)
+        ]
         t_rc0 = time.perf_counter()
         try:
-            md_text_en = (self._segmenter or mdseg).recombine(doc.text_md, translated_items, plan, options={})
+            md_text_en = (self._segmenter or mdseg).recombine(
+                doc.text_md, translated_items, plan, options={}
+            )
         except mdseg.RecombinationError as exc:
-            raise TranslationError("recompose failed", {"reason": "RECOMPOSE_FAILED", "message": str(exc)})
+            raise TranslationError(
+                "recompose failed", {"reason": "RECOMPOSE_FAILED", "message": str(exc)}
+            )
         except Exception as exc:
-            raise TranslationError("recompose failed", {"reason": "RECOMPOSE_FAILED", "message": exc.__class__.__name__})
+            raise TranslationError(
+                "recompose failed",
+                {"reason": "RECOMPOSE_FAILED", "message": exc.__class__.__name__},
+            )
         t_rc1 = time.perf_counter()
 
         # 5) Assemble output with telemetry
         engine = self._engines.get(src)
-        fingerprint = engine.get("fingerprint") if engine else self._compute_model_fingerprint(self._models[src])
+        fingerprint = (
+            engine.get("fingerprint")
+            if engine
+            else self._compute_model_fingerprint(self._models[src])
+        )
         meta = dict(doc.meta or {})
         meta.setdefault("translator", {})
         meta["translator"] = {
@@ -633,7 +697,7 @@ class MarianOpus(TranslatePort):
     # Internals
     # -----------------------------
 
-    def _translate_batch_texts(self, batch_texts: List[str], src_lang: str) -> List[str]:
+    def _translate_batch_texts(self, batch_texts: list[str], src_lang: str) -> list[str]:
         """Translate a batch of plain text segments deterministically.
 
         Contract
@@ -673,7 +737,10 @@ class MarianOpus(TranslatePort):
         try:
             import torch  # type: ignore
         except Exception as exc:  # pragma: no cover
-            raise TranslationError("batch failed", {"reason": "BATCH_GENERATION_FAILED", "message": exc.__class__.__name__})
+            raise TranslationError(
+                "batch failed",
+                {"reason": "BATCH_GENERATION_FAILED", "message": exc.__class__.__name__},
+            )
 
         try:
             enc = tokenizer(
@@ -705,13 +772,22 @@ class MarianOpus(TranslatePort):
         except Exception as exc:
             raise TranslationError(
                 "batch failed",
-                {"reason": "BATCH_GENERATION_FAILED", "message": str(exc.__class__.__name__), "count": len(batch_texts)},
+                {
+                    "reason": "BATCH_GENERATION_FAILED",
+                    "message": str(exc.__class__.__name__),
+                    "count": len(batch_texts),
+                },
             )
 
         if len(decoded) != len(batch_texts):
             raise TranslationError(
                 "batch failed",
-                {"reason": "BATCH_GENERATION_FAILED", "message": "mismatched outputs", "got": len(decoded), "exp": len(batch_texts)},
+                {
+                    "reason": "BATCH_GENERATION_FAILED",
+                    "message": "mismatched outputs",
+                    "got": len(decoded),
+                    "exp": len(batch_texts),
+                },
             )
 
         return decoded
@@ -729,7 +805,7 @@ class MarianOpus(TranslatePort):
         # Leave room conservatively
         return max(8, int(max_len) - 8)
 
-    def _split_by_tokens(self, tokenizer: Any, text: str, *, max_tokens_input: int) -> List[str]:
+    def _split_by_tokens(self, tokenizer: Any, text: str, *, max_tokens_input: int) -> list[str]:
         """Split text into subparts so each subpart fits ``max_tokens_input``.
 
         Strategy
@@ -768,7 +844,7 @@ class MarianOpus(TranslatePort):
         # Deterministic fallback splitter
         import re
 
-        parts: List[str] = []
+        parts: list[str] = []
         start = 0
         L = len(text)
         while start < L:
@@ -804,7 +880,7 @@ class MarianOpus(TranslatePort):
                 start += cut
 
         # Final merge pass under budget (greedy)
-        merged: List[str] = []
+        merged: list[str] = []
         for s in parts:
             if not merged:
                 merged.append(s)
@@ -818,7 +894,9 @@ class MarianOpus(TranslatePort):
                 merged.append(s)
         return merged
 
-    def _make_cache_key(self, text: str, src: str, tgt: str, engine_key: str, glossary_id: Optional[str]) -> str:
+    def _make_cache_key(
+        self, text: str, src: str, tgt: str, engine_key: str, glossary_id: str | None
+    ) -> str:
         """Return a deterministic cache key for one segment.
 
         Format: sha256("\x1f".join([text, src, tgt, engine_key, glossary_id or ""]))
@@ -838,7 +916,7 @@ class MarianOpus(TranslatePort):
             p = os.path.abspath(model_id_or_path)
         except Exception:
             p = model_id_or_path
-        entries: List[Tuple[str, int, int]] = []
+        entries: list[tuple[str, int, int]] = []
         if os.path.isdir(p):
             try:
                 for name in sorted(os.listdir(p)):
@@ -865,4 +943,3 @@ class MarianOpus(TranslatePort):
             if getattr(s, "id", None) == seg_id:
                 return getattr(s, "text", "")
         return ""
-

@@ -1,4 +1,7 @@
-import os, json
+import json
+import os
+
+
 def build_tree(path):
     """Builds a directory tree structure starting from the given path."""
     tree = {}
@@ -9,6 +12,7 @@ def build_tree(path):
         else:
             tree[entry] = None
     return tree
+
 
 root_dir = "../Knowledge"
 tree = build_tree(root_dir)

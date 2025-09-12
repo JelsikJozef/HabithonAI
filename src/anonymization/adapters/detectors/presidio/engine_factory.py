@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, Optional, Tuple
+
 import importlib
 import importlib.util
 import logging
@@ -14,7 +14,9 @@ def _model_available(model_name: str) -> bool:
         return False
 
 
-def resolve_models(requested: Dict[str, str], fallback_model: Optional[str]) -> Tuple[Dict[str, str], Dict[str, str], Optional[str]]:
+def resolve_models(
+    requested: dict[str, str], fallback_model: str | None
+) -> tuple[dict[str, str], dict[str, str], str | None]:
     """Resolve effective spaCy models per language with fallbacks.
 
     Parameters
@@ -26,9 +28,9 @@ def resolve_models(requested: Dict[str, str], fallback_model: Optional[str]) -> 
     - disabled_langs: Dict of language->requested_model that could not be satisfied.
     - fallback_lang: Preferred fallback language code chosen from effective models.
     """
-    effective: Dict[str, str] = {}
-    disabled: Dict[str, str] = {}
-    fb_lang: Optional[str] = None
+    effective: dict[str, str] = {}
+    disabled: dict[str, str] = {}
+    fb_lang: str | None = None
 
     for lang, model in requested.items():
         if _model_available(model):
@@ -37,18 +39,33 @@ def resolve_models(requested: Dict[str, str], fallback_model: Optional[str]) -> 
         # Try provided fallback
         if fallback_model and _model_available(fallback_model):
             effective[lang] = fallback_model
-            logger.warning("Presidio: model '%s' for lang '%s' not found; falling back to %s", model, lang, fallback_model)
+            logger.warning(
+                "Presidio: model '%s' for lang '%s' not found; falling back to %s",
+                model,
+                lang,
+                fallback_model,
+            )
             continue
         # Try default multilingual
         if model != "xx_ent_wiki_sm" and _model_available("xx_ent_wiki_sm"):
             effective[lang] = "xx_ent_wiki_sm"
-            logger.warning("Presidio: model '%s' for lang '%s' not found; falling back to xx_ent_wiki_sm", model, lang)
+            logger.warning(
+                "Presidio: model '%s' for lang '%s' not found; falling back to xx_ent_wiki_sm",
+                model,
+                lang,
+            )
         else:
             disabled[lang] = model
-            logger.warning("Presidio: model '%s' for lang '%s' not found and no fallback available; disabling this language", model, lang)
+            logger.warning(
+                "Presidio: model '%s' for lang '%s' not found and no fallback available; disabling this language",
+                model,
+                lang,
+            )
 
     # choose fallback language preference: any language using the fallback model or English, else first
-    fb_lang = next((l for l, m in effective.items() if m in {fallback_model, "xx_ent_wiki_sm"}), None)
+    fb_lang = next(
+        (l for l, m in effective.items() if m in {fallback_model, "xx_ent_wiki_sm"}), None
+    )
     if not fb_lang and "en" in effective:
         fb_lang = "en"
     if not fb_lang and effective:
@@ -57,7 +74,7 @@ def resolve_models(requested: Dict[str, str], fallback_model: Optional[str]) -> 
     return effective, disabled, fb_lang
 
 
-def build_analyzer(effective_models: Dict[str, str]):
+def build_analyzer(effective_models: dict[str, str]):
     """Build a Presidio AnalyzerEngine and fresh RecognizerRegistry.
 
     Parameters
@@ -76,7 +93,12 @@ def build_analyzer(effective_models: Dict[str, str]):
     registry = RecognizerRegistry()
 
     if effective_models:
-        nlp_conf = {"nlp_engine_name": "spacy", "models": [{"lang_code": l, "model_name": m} for l, m in sorted(effective_models.items())]}
+        nlp_conf = {
+            "nlp_engine_name": "spacy",
+            "models": [
+                {"lang_code": l, "model_name": m} for l, m in sorted(effective_models.items())
+            ],
+        }
         nlp_engine = None
         try:
             provider = NlpEngineProvider(nlp_configuration=nlp_conf)  # type: ignore[call-arg]
@@ -96,11 +118,15 @@ def build_analyzer(effective_models: Dict[str, str]):
             pass
         analyzer = AnalyzerEngine(
             nlp_engine=nlp_engine,
-            supported_languages=list(getattr(registry, "supported_languages", list(effective_models.keys()))),
+            supported_languages=list(
+                getattr(registry, "supported_languages", list(effective_models.keys()))
+            ),
             registry=registry,
         )
     else:
         analyzer = AnalyzerEngine(registry=registry)
-        logger.warning("Presidio: no configured spaCy models available; using Presidio default NLP engine (usually English only)")
+        logger.warning(
+            "Presidio: no configured spaCy models available; using Presidio default NLP engine (usually English only)"
+        )
 
     return analyzer, registry

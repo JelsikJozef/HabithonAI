@@ -1,9 +1,10 @@
-from typing import List, Optional
 from ..domain.entities import DetectionResult, merge_overlapping_entities
 from ..domain.ports import DetectorPort
 
 
-def detect_all(text: str, detectors: List[DetectorPort], language: Optional[str] = None) -> DetectionResult:
+def detect_all(
+    text: str, detectors: list[DetectorPort], language: str | None = None
+) -> DetectionResult:
     """Run all detectors on text and return merged PII entities.
 
     Parameters

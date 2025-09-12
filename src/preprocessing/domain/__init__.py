@@ -1,12 +1,12 @@
+from .errors import OcrError, ParserNotFoundError, PreprocessingError, SerializationError
 from .models import ParsedDocument, RawDocument
-from .errors import PreprocessingError, ParserNotFoundError, OcrError, SerializationError
 from .ports import (
-    IngestionPort,
-    ParserRegistryPort,
-    OcrPort,
-    EnrichmentPort,
-    LlmEnrichmentPort,
     DedupPort,
+    EnrichmentPort,
+    IngestionPort,
+    LlmEnrichmentPort,
+    OcrPort,
+    ParserRegistryPort,
     QualityPort,
     SerializerPort,
 )

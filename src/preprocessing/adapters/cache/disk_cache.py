@@ -19,12 +19,13 @@ Determinism & safety:
 Note: Keys must be precomputed and filename-safe; this adapter does not hash or
 interpret keys. Values are UTF-8 strings (no binary blobs).
 """
+
 from __future__ import annotations
 
 import os
 import sqlite3
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class CacheError(Exception):
@@ -38,7 +39,7 @@ class CacheError(Exception):
         details: Optional structured details dictionary.
     """
 
-    def __init__(self, code: str, message: str, *, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, code: str, message: str, *, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
@@ -99,11 +100,11 @@ class DiskCache:
         mode: str = "sqlite",
         read_only: bool = False,
         max_value_bytes: int = 64_000,
-        max_items: Optional[int] = None,
-        default_ttl_seconds: Optional[int] = None,
+        max_items: int | None = None,
+        default_ttl_seconds: int | None = None,
         sync_policy: str = "normal",
         journal_mode: str = "wal",
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         stats_enabled: bool = True,
     ) -> None:
         self._root_path = root_path
@@ -117,8 +118,8 @@ class DiskCache:
         self._namespace = namespace
         self._stats_enabled = bool(stats_enabled)
 
-        self._conn: Optional[sqlite3.Connection] = None
-        self._stats: Dict[str, int] = {"hits": 0, "misses": 0, "puts": 0, "evictions": 0}
+        self._conn: sqlite3.Connection | None = None
+        self._stats: dict[str, int] = {"hits": 0, "misses": 0, "puts": 0, "evictions": 0}
 
     # ---------------------------- Lifecycle ----------------------------
 
@@ -132,7 +133,9 @@ class DiskCache:
             CacheError("OPEN_FAILED"): If the backend fails to initialize.
         """
         if self._mode != "sqlite":
-            raise CacheError("OPEN_FAILED", f"Unsupported mode '{self._mode}'. Only 'sqlite' is implemented.")
+            raise CacheError(
+                "OPEN_FAILED", f"Unsupported mode '{self._mode}'. Only 'sqlite' is implemented."
+            )
         try:
             first_time = not os.path.exists(self._root_path)
             self._conn = sqlite3.connect(self._root_path)
@@ -176,7 +179,7 @@ class DiskCache:
 
     # ---------------------------- Operations ---------------------------
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         """Retrieve a cached value by key, honoring TTL.
 
         Parameters:
@@ -236,7 +239,7 @@ class DiskCache:
         except Exception as ex:
             raise CacheError("GET_FAILED", f"Failed to get key: {ex}") from ex
 
-    def put(self, key: str, value: str, *, ttl_seconds: Optional[int] = None) -> None:
+    def put(self, key: str, value: str, *, ttl_seconds: int | None = None) -> None:
         """Insert or update a cached value atomically.
 
         Parameters:
@@ -262,7 +265,10 @@ class DiskCache:
         # Size guardrail
         size_bytes = len(value.encode("utf-8"))
         if size_bytes > self._max_value_bytes:
-            raise CacheError("VALUE_TOO_LARGE", f"Value size {size_bytes} exceeds max {self._max_value_bytes} bytes.")
+            raise CacheError(
+                "VALUE_TOO_LARGE",
+                f"Value size {size_bytes} exceeds max {self._max_value_bytes} bytes.",
+            )
 
         nkey = self._apply_ns(key)
         now = self._now()
@@ -299,12 +305,17 @@ class DiskCache:
                 try:
                     with self._conn:
                         # Deterministic LRU: by effective access time asc, then key asc
-                        keys = [r[0] for r in self._conn.execute(
-                            "SELECT key FROM entries ORDER BY COALESCE(last_accessed, created_at) ASC, key ASC LIMIT ?",
-                            (overflow,),
-                        ).fetchall()]
+                        keys = [
+                            r[0]
+                            for r in self._conn.execute(
+                                "SELECT key FROM entries ORDER BY COALESCE(last_accessed, created_at) ASC, key ASC LIMIT ?",
+                                (overflow,),
+                            ).fetchall()
+                        ]
                         if keys:
-                            self._conn.executemany("DELETE FROM entries WHERE key = ?", [(k,) for k in keys])
+                            self._conn.executemany(
+                                "DELETE FROM entries WHERE key = ?", [(k,) for k in keys]
+                            )
                     if self._stats_enabled:
                         self._stats["evictions"] += len(keys)
                 except Exception as ex:
@@ -335,7 +346,7 @@ class DiskCache:
             # Non-critical; ignore
             pass
 
-    def clear(self, namespace: Optional[str] = None) -> None:
+    def clear(self, namespace: str | None = None) -> None:
         """Delete all entries, or those within a logical namespace.
 
         Parameters:
@@ -361,12 +372,14 @@ class DiskCache:
                     ns = namespace if namespace is not None else self._namespace
                     prefix = f"{ns}:" if ns else ""
                     if prefix:
-                        self._conn.execute("DELETE FROM entries WHERE key LIKE ? ESCAPE '/'", (prefix + '%',))
+                        self._conn.execute(
+                            "DELETE FROM entries WHERE key LIKE ? ESCAPE '/'", (prefix + "%",)
+                        )
         except Exception:
             # Non-critical; ignore clear errors
             pass
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Return lightweight counters and current item count.
 
         Returns:
@@ -384,7 +397,7 @@ class DiskCache:
         res = {**self._stats, "items": items, "backend": self._mode}
         return res
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         """Return engine fingerprint and configuration for reporting.
 
         Returns:

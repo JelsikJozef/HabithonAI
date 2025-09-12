@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from .domain.models import ParsedDocument
 
@@ -46,7 +47,9 @@ class AnonymizationBridge:
         mappings: list[dict[str, Any]] = []
         actual_ctx: str | None = ctx_id_hint
         try:
-            pseudo_res = self._call_pseudonymize(text, language, context_id=ctx_id_hint, entities=entities)
+            pseudo_res = self._call_pseudonymize(
+                text, language, context_id=ctx_id_hint, entities=entities
+            )
             pseudo_text, mappings = self._normalize_pseudonymize(pseudo_res)
             # Capture context id from result if provided
             if isinstance(pseudo_res, dict) and pseudo_res.get("context_id"):
@@ -58,17 +61,21 @@ class AnonymizationBridge:
                     pass
         except Exception:
             pseudo_text, mappings = "", []
-        token_spans = [{"token": m.get("token"), "type": m.get("type")} for m in mappings if m.get("token")]
+        token_spans = [
+            {"token": m.get("token"), "type": m.get("type")} for m in mappings if m.get("token")
+        ]
         changed = bool(pseudo_text) and pseudo_text != text
 
         # Merge metadata
         meta = dict(doc.metadata)
-        meta.update({
-            "pii_entities": entities,
-            "pii_count": pii_count,
-            "token_spans": token_spans,
-            "pseudonymized": changed,
-        })
+        meta.update(
+            {
+                "pii_entities": entities,
+                "pii_count": pii_count,
+                "token_spans": token_spans,
+                "pseudonymized": changed,
+            }
+        )
         # Always expose context id and pseudonymized text for downstream LLM step
         if actual_ctx:
             meta["anon_context_id"] = actual_ctx
@@ -98,7 +105,14 @@ class AnonymizationBridge:
                 return d(text)
         return []
 
-    def _call_pseudonymize(self, text: str, language: str | None, *, context_id: str | None = None, entities: list[dict[str, Any]] | None = None) -> Any:
+    def _call_pseudonymize(
+        self,
+        text: str,
+        language: str | None,
+        *,
+        context_id: str | None = None,
+        entities: list[dict[str, Any]] | None = None,
+    ) -> Any:
         p = self._pseudonymize
         if hasattr(p, "run") and callable(getattr(p, "run")):
             # Prefer keyword arguments if supported
@@ -114,7 +128,9 @@ class AnonymizationBridge:
                         return p.run(text)
         if hasattr(p, "pseudonymize") and callable(getattr(p, "pseudonymize")):
             try:
-                return p.pseudonymize(text, language=language, context_id=context_id, entities=entities)
+                return p.pseudonymize(
+                    text, language=language, context_id=context_id, entities=entities
+                )
             except TypeError:
                 try:
                     return p.pseudonymize(text, language=language, context_id=context_id)
@@ -192,9 +208,17 @@ class AnonymizationBridge:
         norm_maps: list[dict[str, Any]] = []
         for m in maps:
             if isinstance(m, dict):
-                norm_maps.append({"token": m.get("token"), "value": m.get("value"), "type": m.get("type")})
+                norm_maps.append(
+                    {"token": m.get("token"), "value": m.get("value"), "type": m.get("type")}
+                )
             else:
-                norm_maps.append({"token": getattr(m, "token", None), "value": getattr(m, "value", None), "type": getattr(m, "type", None)})
+                norm_maps.append(
+                    {
+                        "token": getattr(m, "token", None),
+                        "value": getattr(m, "value", None),
+                        "type": getattr(m, "type", None),
+                    }
+                )
         return text, norm_maps
 
     def _include_text(self) -> bool:

@@ -134,14 +134,16 @@ Notes
 - to_dict() returns a deterministic, JSON-serializable mapping; redacted_dict()
   is available via to_dict(settings, redacted=True).
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from pathlib import Path
-from types import MappingProxyType
-from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Tuple
 import os
 import re
+from collections.abc import Iterable, Mapping, MutableMapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
 
 try:  # Version import is lightweight
     from preprocessing import __version__ as _PKG_VERSION
@@ -158,6 +160,7 @@ except Exception:  # pragma: no cover - optional
 try:
     from preprocessing.domain.errors import PreprocessingError
 except Exception:  # pragma: no cover - test isolation fallback
+
     class PreprocessingError(Exception):
         """Base exception for preprocessing errors (fallback)."""
 
@@ -212,9 +215,7 @@ def _bool(value: Any, *, default: bool | None = None) -> bool:
         return False
     if default is not None:
         return default
-    raise SettingsError(
-        f"invalid boolean value: {value!r}; use one of {_BOOL_TRUE | _BOOL_FALSE}"
-    )
+    raise SettingsError(f"invalid boolean value: {value!r}; use one of {_BOOL_TRUE | _BOOL_FALSE}")
 
 
 def _int(value: Any, *, name: str, min_value: int | None = None) -> int:
@@ -231,7 +232,9 @@ def _int(value: Any, *, name: str, min_value: int | None = None) -> int:
     return iv
 
 
-def _float(value: Any, *, name: str, min_value: float | None = None, max_value: float | None = None) -> float:
+def _float(
+    value: Any, *, name: str, min_value: float | None = None, max_value: float | None = None
+) -> float:
     try:
         fv = float(value)
     except Exception as e:
@@ -243,7 +246,7 @@ def _float(value: Any, *, name: str, min_value: float | None = None, max_value: 
     return fv
 
 
-def _csv(value: Any) -> Tuple[str, ...]:
+def _csv(value: Any) -> tuple[str, ...]:
     """Parse a comma-separated list into a tuple of trimmed non-empty strings."""
     if value is None:
         return tuple()
@@ -254,7 +257,7 @@ def _csv(value: Any) -> Tuple[str, ...]:
     return tuple(s for s in items if s)
 
 
-def _normalize_exts(values: Iterable[str]) -> Tuple[str, ...]:
+def _normalize_exts(values: Iterable[str]) -> tuple[str, ...]:
     """Normalize file extensions to deterministic internal form.
 
     Rules
@@ -268,23 +271,21 @@ def _normalize_exts(values: Iterable[str]) -> Tuple[str, ...]:
         s = str(v).strip().lower()
         if not s:
             continue
-        if not s.startswith('.'):
-            s = '.' + s
+        if not s.startswith("."):
+            s = "." + s
         if not _EXT_RE.match(s):
-            raise SettingsError(
-                f"invalid extension {v!r}; use forms like '.pdf', '.docx', '.xlsx'"
-            )
+            raise SettingsError(f"invalid extension {v!r}; use forms like '.pdf', '.docx', '.xlsx'")
         norm.add(s)
     return tuple(sorted(norm))
 
 
-def _normalize_globs(values: Iterable[str]) -> Tuple[str, ...]:
+def _normalize_globs(values: Iterable[str]) -> tuple[str, ...]:
     """Normalize glob patterns to a deterministic, lexicographically sorted tuple."""
     uniq = {str(v).strip() for v in values if str(v).strip()}
     return tuple(sorted(uniq))
 
 
-def _normalize_page_range(spec: Optional[str]) -> Optional[str]:
+def _normalize_page_range(spec: str | None) -> str | None:
     """Validate and normalize a page range spec like "1-3,5".
 
     Returns the stripped spec or None. Raises SettingsError if malformed.
@@ -299,7 +300,9 @@ def _normalize_page_range(spec: Optional[str]) -> Optional[str]:
     return s
 
 
-def _abs_path(value: str | os.PathLike[str], *, name: str, must_exist: bool = False, must_be_dir: bool = False) -> Path:
+def _abs_path(
+    value: str | os.PathLike[str], *, name: str, must_exist: bool = False, must_be_dir: bool = False
+) -> Path:
     p = Path(value).expanduser().resolve()
     if must_exist and not p.exists():
         raise SettingsError(f"{name} not found: {p}. Provide an existing path.")
@@ -357,6 +360,7 @@ def _load_dotenv_if_present(env: MutableMapping[str, str]) -> None:
 # endregion
 
 # region Settings dataclass
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -457,7 +461,7 @@ class Settings:
 
     # Selection
     recurse: bool = True
-    include_ext: Tuple[str, ...] = (
+    include_ext: tuple[str, ...] = (
         ".docx",
         ".xlsx",
         ".pdf",
@@ -465,8 +469,8 @@ class Settings:
         ".jpeg",
         ".msg",
     )
-    exclude_glob: Tuple[str, ...] = tuple()
-    max_files: Optional[int] = None
+    exclude_glob: tuple[str, ...] = tuple()
+    max_files: int | None = None
 
     # Encoding / Serializer
     normalize_eol: str = "lf"
@@ -474,7 +478,7 @@ class Settings:
     assets_subdir: str = "assets"
     write_meta: str = "sidecar"
     overwrite: bool = False
-    report_path: Optional[Path] = None
+    report_path: Path | None = None
 
     # Parsers (common)
     escape_pipes_in_tables: bool = True
@@ -487,12 +491,12 @@ class Settings:
     # XLSX
     xlsx_header_rows: int = 1
     xlsx_render_mode: str = "display"
-    xlsx_max_rows: Optional[int] = None
-    xlsx_max_cols: Optional[int] = None
+    xlsx_max_rows: int | None = None
+    xlsx_max_cols: int | None = None
     xlsx_merged_cells_policy: str = "fill"
 
     # PDF
-    pdf_page_range: Optional[str] = None
+    pdf_page_range: str | None = None
     pdf_remove_headers_footers: bool = True
     pdf_page_divider: str = "\n\n---\n\n"
     pdf_export_images: bool = False
@@ -501,34 +505,34 @@ class Settings:
 
     # OCR
     ocr_enabled: bool = True
-    ocr_langs: Tuple[str, ...] = ("eng",)
+    ocr_langs: tuple[str, ...] = ("eng",)
     ocr_confidence_threshold: float = 0.55
     ocr_fail_on_low_confidence: bool = False
     ocr_max_working_dpi: int = 300
     save_processed_assets: bool = False
 
     # MSG
-    msg_prefer_body: Tuple[str, ...] = ("html", "text", "rtf")
+    msg_prefer_body: tuple[str, ...] = ("html", "text", "rtf")
     msg_export_assets: bool = True
     msg_assets_subdir: str = "msg_assets"
     msg_quoted_reply_mode: str = "blockquote"
 
     # Translation (forward-compatible)
-    translator: Optional[str] = None
-    mt_model_id: Optional[str] = None
-    mt_device: Optional[str] = None
-    mt_max_tokens: Optional[int] = None
-    mt_batch_size: Optional[int] = None
+    translator: str | None = None
+    mt_model_id: str | None = None
+    mt_device: str | None = None
+    mt_max_tokens: int | None = None
+    mt_batch_size: int | None = None
 
     # Privacy (forward-compatible)
     safe_order: bool = False
 
     # Vector store (forward-compatible)
-    vector_chunk_size: Optional[int] = None
-    vector_chunk_overlap: Optional[int] = None
-    vector_embeddings: Optional[str] = None
-    qdrant_url: Optional[str] = None
-    qdrant_collection: Optional[str] = None
+    vector_chunk_size: int | None = None
+    vector_chunk_overlap: int | None = None
+    vector_embeddings: str | None = None
+    qdrant_url: str | None = None
+    qdrant_collection: str | None = None
 
     # Audit
     origin: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
@@ -552,7 +556,7 @@ _CRITICAL_ORIGIN_FIELDS = (
 )
 
 
-def _apply_profile_defaults(base: Dict[str, Any], profile: str) -> None:
+def _apply_profile_defaults(base: dict[str, Any], profile: str) -> None:
     p = profile.lower().strip()
     if p not in _ALLOWED_PROFILES:
         raise SettingsError(f"invalid profile {profile!r}; allowed: {sorted(_ALLOWED_PROFILES)}")
@@ -581,9 +585,11 @@ def _apply_profile_defaults(base: Dict[str, Any], profile: str) -> None:
         )
 
 
-def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[str, Any]] = None) -> Settings:
+def _build_from_mapping(
+    env: Mapping[str, str], cli_overrides: Mapping[str, Any] | None = None
+) -> Settings:
     # Start with explicit defaults in dict form
-    cfg: Dict[str, Any] = {
+    cfg: dict[str, Any] = {
         # general
         "app_name": "habithon-preprocessing",
         "app_version": _PKG_VERSION,
@@ -654,7 +660,7 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
         "qdrant_collection": None,
     }
 
-    origin: Dict[str, str] = {}
+    origin: dict[str, str] = {}
 
     # 1) Profile first (env-provided profile value can change it)
     # If APP_PROFILE present, use it; else default
@@ -731,7 +737,9 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
     if (v := env.get("XLSX_HEADER_ROWS")) is not None:
         cfg["xlsx_header_rows"] = _int(v, name="xlsx_header_rows", min_value=0)
     if (v := env.get("XLSX_RENDER_MODE")) is not None:
-        cfg["xlsx_render_mode"] = _enum(v, name="xlsx_render_mode", allowed=_ALLOWED_XLSX_RENDER_MODE)
+        cfg["xlsx_render_mode"] = _enum(
+            v, name="xlsx_render_mode", allowed=_ALLOWED_XLSX_RENDER_MODE
+        )
     if (v := env.get("XLSX_MAX_ROWS")) is not None and str(v).strip() != "":
         cfg["xlsx_max_rows"] = _int(v, name="xlsx_max_rows", min_value=1)
     if (v := env.get("XLSX_MAX_COLS")) is not None and str(v).strip() != "":
@@ -753,7 +761,9 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
     if (v := env.get("PDF_ASSETS_SUBDIR")) is not None:
         cfg["pdf_assets_subdir"] = str(v).strip()
     if (v := env.get("PDF_TABLE_DETECTION")) is not None:
-        cfg["pdf_table_detection"] = _enum(v, name="pdf_table_detection", allowed=_ALLOWED_PDF_TABLE_DET)
+        cfg["pdf_table_detection"] = _enum(
+            v, name="pdf_table_detection", allowed=_ALLOWED_PDF_TABLE_DET
+        )
 
     # OCR
     if (v := env.get("OCR_ENABLED")) is not None:
@@ -762,7 +772,9 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
         langs = tuple(x.lower() for x in _csv(v)) or ("eng",)
         cfg["ocr_langs"] = langs
     if (v := env.get("OCR_CONFIDENCE_THRESHOLD")) is not None:
-        cfg["ocr_confidence_threshold"] = _float(v, name="ocr_confidence_threshold", min_value=0.0, max_value=1.0)
+        cfg["ocr_confidence_threshold"] = _float(
+            v, name="ocr_confidence_threshold", min_value=0.0, max_value=1.0
+        )
     if (v := env.get("OCR_FAIL_ON_LOW_CONFIDENCE")) is not None:
         cfg["ocr_fail_on_low_confidence"] = _bool(v)
     if (v := env.get("OCR_MAX_WORKING_DPI")) is not None:
@@ -779,7 +791,9 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
     if (v := env.get("MSG_ASSETS_SUBDIR")) is not None:
         cfg["msg_assets_subdir"] = str(v).strip()
     if (v := env.get("MSG_QUOTED_REPLY_MODE")) is not None:
-        cfg["msg_quoted_reply_mode"] = _enum(v, name="msg_quoted_reply_mode", allowed=_ALLOWED_MSG_REPLY_MODE)
+        cfg["msg_quoted_reply_mode"] = _enum(
+            v, name="msg_quoted_reply_mode", allowed=_ALLOWED_MSG_REPLY_MODE
+        )
 
     # Translation
     if (v := env.get("TRANSLATOR")) is not None and str(v).strip() != "":
@@ -832,7 +846,9 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
             elif kn == "overwrite":
                 cfg[kn] = _bool(v)
             elif kn == "report_path":
-                cfg[kn] = None if v in (None, "") else _abs_path(v, name="report_path", must_exist=False)
+                cfg[kn] = (
+                    None if v in (None, "") else _abs_path(v, name="report_path", must_exist=False)
+                )
             else:
                 # Generic assignment; additional specific constraints validated below
                 cfg[kn] = v
@@ -842,7 +858,9 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
     # Required fields: src_dir, out_dir
     # If not provided, try environment (already set) or fail
     if "src_dir" not in cfg:
-        raise SettingsError("SRC_DIR must be provided (env or CLI) and point to an existing directory.")
+        raise SettingsError(
+            "SRC_DIR must be provided (env or CLI) and point to an existing directory."
+        )
     if "out_dir" not in cfg:
         raise SettingsError("OUT_DIR must be provided (env or CLI) to determine output location.")
 
@@ -856,9 +874,13 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
             f"normalize_eol must be one of {sorted(_ALLOWED_EOL)} (got: {cfg['normalize_eol']!r})"
         )
     if cfg["on_error"] not in _ALLOWED_ON_ERROR:
-        raise SettingsError(f"on_error must be one of {sorted(_ALLOWED_ON_ERROR)} (got: {cfg['on_error']!r})")
+        raise SettingsError(
+            f"on_error must be one of {sorted(_ALLOWED_ON_ERROR)} (got: {cfg['on_error']!r})"
+        )
     if cfg["write_meta"] not in _ALLOWED_WRITE_META:
-        raise SettingsError(f"write_meta must be one of {sorted(_ALLOWED_WRITE_META)} (got: {cfg['write_meta']!r})")
+        raise SettingsError(
+            f"write_meta must be one of {sorted(_ALLOWED_WRITE_META)} (got: {cfg['write_meta']!r})"
+        )
     if cfg["xlsx_render_mode"] not in _ALLOWED_XLSX_RENDER_MODE:
         raise SettingsError(
             f"xlsx_render_mode must be one of {sorted(_ALLOWED_XLSX_RENDER_MODE)} (got: {cfg['xlsx_render_mode']!r})"
@@ -881,7 +903,9 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
     cfg["exclude_glob"] = _normalize_globs(cfg.get("exclude_glob", ()))
 
     # Normalize MSG body preference values to deterministic tuple
-    cfg["msg_prefer_body"] = tuple(str(x).lower().strip() for x in cfg.get("msg_prefer_body", ()) if str(x).strip())
+    cfg["msg_prefer_body"] = tuple(
+        str(x).lower().strip() for x in cfg.get("msg_prefer_body", ()) if str(x).strip()
+    )
     if not cfg["msg_prefer_body"]:
         cfg["msg_prefer_body"] = ("html", "text", "rtf")
 
@@ -964,7 +988,8 @@ def _build_from_mapping(env: Mapping[str, str], cli_overrides: Optional[Mapping[
 
 # region Public API
 
-def build_from_env(cli_overrides: Optional[Dict[str, Any]] = None) -> Settings:
+
+def build_from_env(cli_overrides: dict[str, Any] | None = None) -> Settings:
     """Build immutable Settings from defaults, profile, env/.env, and CLI overrides.
 
     The precedence model is: Defaults < Profile < Environment/.env < CLI overrides.
@@ -999,7 +1024,7 @@ def build_from_env(cli_overrides: Optional[Dict[str, Any]] = None) -> Settings:
     return _build_from_mapping(env, cli_overrides)
 
 
-def apply_overrides(settings: Settings, overrides: Dict[str, Any]) -> Settings:
+def apply_overrides(settings: Settings, overrides: dict[str, Any]) -> Settings:
     """Return a new Settings with overrides applied and fully validated.
 
     This function re-applies precedence with the provided overrides on top of
@@ -1025,11 +1050,11 @@ def apply_overrides(settings: Settings, overrides: Dict[str, Any]) -> Settings:
 
     # Convert certain complex types back to env-like strings where necessary
     # but we'll pass as native types to _build_from_mapping via cli_overrides
-    env: Dict[str, str] = {}
+    env: dict[str, str] = {}
 
     # Populate only keys that are env sourced; rest will come from cfg defaults
     # We reuse build logic; pass all current fields via cli to preserve values
-    current_as_cli: Dict[str, Any] = {
+    current_as_cli: dict[str, Any] = {
         # Map directly; include roots and criticals
         "src_dir": settings.src_dir,
         "out_dir": settings.out_dir,
@@ -1096,7 +1121,7 @@ def apply_overrides(settings: Settings, overrides: Dict[str, Any]) -> Settings:
     return _build_from_mapping(env, merged_cli)
 
 
-def to_dict(settings: Settings, redacted: bool = False) -> Dict[str, Any]:
+def to_dict(settings: Settings, redacted: bool = False) -> dict[str, Any]:
     """Convert Settings to a deterministic, JSON-serializable dictionary.
 
     Args:
@@ -1111,11 +1136,12 @@ def to_dict(settings: Settings, redacted: bool = False) -> Dict[str, Any]:
         - Paths are stringified as absolute POSIX-like paths for stability.
         - Tuples are serialized to lists for JSON friendliness.
     """
-    def P(p: Optional[Path]) -> Optional[str]:
+
+    def P(p: Path | None) -> str | None:
         return None if p is None else str(p)
 
     # Compute grouping order deterministically
-    data: Dict[str, Any] = {}
+    data: dict[str, Any] = {}
     data.update(
         {
             "app_name": settings.app_name,
@@ -1250,7 +1276,7 @@ def summary(settings: Settings) -> str:
     )
 
 
-def effective_include_ext(settings: Settings) -> Tuple[str, ...]:
+def effective_include_ext(settings: Settings) -> tuple[str, ...]:
     """Return the normalized, deterministic extension whitelist.
 
     Args:
@@ -1264,4 +1290,3 @@ def effective_include_ext(settings: Settings) -> Tuple[str, ...]:
 
 
 # endregion
-

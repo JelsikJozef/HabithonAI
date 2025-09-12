@@ -1,13 +1,13 @@
 import os
-from typing import List, Tuple, Dict
-from .token_vault.file_store import FileTokenVault
-from .detectors.adapter import PresidioDetector
+
 from ..app.config.pii_settings import PiiSettings
 from ..domain.ports import DetectorPort, TokenVaultPort
+from .detectors.adapter import PresidioDetector
+from .token_vault.file_store import FileTokenVault
 
 
-def _parse_presidio_langs(spec: str) -> Dict[str, str]:
-    mapping: Dict[str, str] = {}
+def _parse_presidio_langs(spec: str) -> dict[str, str]:
+    mapping: dict[str, str] = {}
     for part in (spec or "").split(","):
         part = part.strip()
         if not part:
@@ -18,7 +18,7 @@ def _parse_presidio_langs(spec: str) -> Dict[str, str]:
     return mapping
 
 
-def build_default() -> Tuple[List[DetectorPort], TokenVaultPort]:
+def build_default() -> tuple[list[DetectorPort], TokenVaultPort]:
     """Construct default detectors and token vault based on environment.
 
     Environment variables
@@ -41,5 +41,5 @@ def build_default() -> Tuple[List[DetectorPort], TokenVaultPort]:
     langs_spec = os.getenv("ANON_PRESIDIO_LANGS", "").strip()
     languages = _parse_presidio_langs(langs_spec) if langs_spec else None
 
-    detectors: List[DetectorPort] = [PresidioDetector(settings=settings, languages=languages)]
+    detectors: list[DetectorPort] = [PresidioDetector(settings=settings, languages=languages)]
     return detectors, vault

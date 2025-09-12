@@ -68,11 +68,11 @@ Errors
 import os
 import re
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any
 
-from preprocessing.domain.ports import LanguageDetectError, LanguageDetectPort
-
+from preprocessing.domain.ports import LanguageDetectError
 
 _Label = str
 _Code = str
@@ -143,11 +143,15 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
             raise LanguageDetectError("MODEL_LOAD_FAILED", details={"message": "empty model_path"})
 
         # Core config
-        self._max_chars: int = int(cfg.get("max_chars", self._DEFAULT_MAX_CHARS) or self._DEFAULT_MAX_CHARS)
-        self._min_chars: int = int(cfg.get("min_chars", self._DEFAULT_MIN_CHARS) or self._DEFAULT_MIN_CHARS)
-        self._candidates_cfg: Optional[Sequence[str]] = (
-            [c.lower() for c in (cfg.get("candidates") or [])] or None
+        self._max_chars: int = int(
+            cfg.get("max_chars", self._DEFAULT_MAX_CHARS) or self._DEFAULT_MAX_CHARS
         )
+        self._min_chars: int = int(
+            cfg.get("min_chars", self._DEFAULT_MIN_CHARS) or self._DEFAULT_MIN_CHARS
+        )
+        self._candidates_cfg: Sequence[str] | None = [
+            c.lower() for c in (cfg.get("candidates") or [])
+        ] or None
         self._blacklist_cfg: set[str] = set([b.lower() for b in (cfg.get("blacklist") or [])])
 
         # Preprocess flags
@@ -165,7 +169,7 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
         )
 
         # Seed: accepted for forward-compatibility
-        self._seed: Optional[int] = cfg.get("seed")
+        self._seed: int | None = cfg.get("seed")
 
         # Label -> code mapping
         default_lang_map: dict[str, str] = {
@@ -233,9 +237,9 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
     def detect(
         self,
         text: str,
-        hints: Optional[dict[str, Any]] = None,
+        hints: dict[str, Any] | None = None,
         *,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, float]:
         """Detect the primary language of Markdown text.
 
@@ -359,9 +363,25 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
         except Exception:
             version = "unknown"
         # If explicit lang_map provided, expose its values; else provide a typical FT LID set sample
-        supports = sorted({v for v in self._lang_map.values()} or {
-            "en", "sk", "de", "cs", "pl", "hu", "fr", "es", "it", "pt", "nl", "da", "sv", "no",
-        })
+        supports = sorted(
+            {v for v in self._lang_map.values()}
+            or {
+                "en",
+                "sk",
+                "de",
+                "cs",
+                "pl",
+                "hu",
+                "fr",
+                "es",
+                "it",
+                "pt",
+                "nl",
+                "da",
+                "sv",
+                "no",
+            }
+        )
         return {
             "name": "fasttext-lid176",
             "version": version,
@@ -430,6 +450,7 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
             return m.group(1)
 
         s = self._RE_MD_LINK.sub(_keep_label, s)
+
         # Keep image alt text: ![alt](url) -> alt
         def _keep_alt(m: re.Match[str]) -> str:
             return m.group(1) or ""
@@ -566,7 +587,7 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
         r = max(0.0, min(1.0, float(raw)))
         if self._calibration.score_mapping == "piecewise_v1":
             # Simple monotonic alternative: emphasize separation by square root mapping
-            conf = r ** 0.5
+            conf = r**0.5
         else:  # identity or unknown
             conf = r
         # Apply length-based floor and candidate penalty
@@ -578,7 +599,7 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
         conf = max(self._calibration.min_confidence_report, min(1.0, conf))
         return conf
 
-    def _best_effort_guess(self, cleaned: str, hints: Optional[dict[str, Any]]) -> str:
+    def _best_effort_guess(self, cleaned: str, hints: dict[str, Any] | None) -> str:
         """Guess a reasonable language when text is too short/noisy.
 
         Priority:

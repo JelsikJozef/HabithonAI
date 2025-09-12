@@ -1,6 +1,5 @@
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 import os
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -22,39 +21,80 @@ class PiiSettings:
     - person_context_de: Context words for German PERSON to reduce false positives.
     - merge_strategy: Post-merge strategy indicator (informational; domain merge logic enforces actual behavior).
     """
+
     # Language & models
-    language_models: Dict[str, str] = field(default_factory=lambda: {
-        "en": "en_core_web_sm",
-        "de": "de_core_news_sm",
-        "sk": os.getenv("ANON_PRESIDIO_FALLBACK_MODEL", "xx_ent_wiki_sm") or "xx_ent_wiki_sm",
-    })
-    fallback_model: str = field(default_factory=lambda: os.getenv("ANON_PRESIDIO_FALLBACK_MODEL", "xx_ent_wiki_sm"))
-    disable_regex_fallback: bool = field(default_factory=lambda: str(os.getenv("ANON_PRESIDIO_DISABLE_FALLBACK", "0")).strip().lower() in {"1", "true", "yes", "on"})
+    language_models: dict[str, str] = field(
+        default_factory=lambda: {
+            "en": "en_core_web_sm",
+            "de": "de_core_news_sm",
+            "sk": os.getenv("ANON_PRESIDIO_FALLBACK_MODEL", "xx_ent_wiki_sm") or "xx_ent_wiki_sm",
+        }
+    )
+    fallback_model: str = field(
+        default_factory=lambda: os.getenv("ANON_PRESIDIO_FALLBACK_MODEL", "xx_ent_wiki_sm")
+    )
+    disable_regex_fallback: bool = field(
+        default_factory=lambda: str(os.getenv("ANON_PRESIDIO_DISABLE_FALLBACK", "0"))
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+    )
 
     # Custom recognizers
-    custom_patterns_path: Optional[str] = field(default_factory=lambda: os.getenv("ANON_PRESIDIO_PATTERNS"))
+    custom_patterns_path: str | None = field(
+        default_factory=lambda: os.getenv("ANON_PRESIDIO_PATTERNS")
+    )
     enable_predefined_recognizers: bool = True
 
     # Person patterns tuning
-    person_score_sk: float = field(default_factory=lambda: float(os.getenv("ANON_PERSON_SCORE_SK", "0.8")))
-    person_score_de: float = field(default_factory=lambda: float(os.getenv("ANON_PERSON_SCORE_DE", "0.8")))
+    person_score_sk: float = field(
+        default_factory=lambda: float(os.getenv("ANON_PERSON_SCORE_SK", "0.8"))
+    )
+    person_score_de: float = field(
+        default_factory=lambda: float(os.getenv("ANON_PERSON_SCORE_DE", "0.8"))
+    )
     # Restrict contexts to salutations/titles only to reduce false positives
-    person_context_sk: List[str] = field(default_factory=lambda: [
-        "pán", "pan", "pani", "slečna", "slecna", "Ing.", "Mgr.", "Bc.", "PhDr.",
-        "Pán", "Pani", "Slečna",
-    ])
-    person_context_de: List[str] = field(default_factory=lambda: [
-        "Herr", "Frau", "Hr.", "Fr.", "Dr.", "Prof.",
-    ])
+    person_context_sk: list[str] = field(
+        default_factory=lambda: [
+            "pán",
+            "pan",
+            "pani",
+            "slečna",
+            "slecna",
+            "Ing.",
+            "Mgr.",
+            "Bc.",
+            "PhDr.",
+            "Pán",
+            "Pani",
+            "Slečna",
+        ]
+    )
+    person_context_de: list[str] = field(
+        default_factory=lambda: [
+            "Herr",
+            "Frau",
+            "Hr.",
+            "Fr.",
+            "Dr.",
+            "Prof.",
+        ]
+    )
 
     # Post-processing
     merge_strategy: str = "length_then_score"  # currently informational; domain merge covers it
 
     # Labels to ignore from NER models (comma-separated env var)
-    ignore_labels: List[str] = field(default_factory=lambda: [lbl.strip() for lbl in os.getenv("ANON_PRESIDIO_IGNORE_LABELS", "").split(",") if lbl.strip()])
+    ignore_labels: list[str] = field(
+        default_factory=lambda: [
+            lbl.strip()
+            for lbl in os.getenv("ANON_PRESIDIO_IGNORE_LABELS", "").split(",")
+            if lbl.strip()
+        ]
+    )
 
     @staticmethod
-    def _parse_langs(spec: str) -> Dict[str, str]:
+    def _parse_langs(spec: str) -> dict[str, str]:
         """Parse a comma-separated spec into a language->model mapping.
 
         Parameters
@@ -63,7 +103,7 @@ class PiiSettings:
         Returns
         - Dict mapping ISO language codes to spaCy model names.
         """
-        mapping: Dict[str, str] = {}
+        mapping: dict[str, str] = {}
         for part in (spec or "").split(","):
             part = part.strip()
             if not part:

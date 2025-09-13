@@ -15,12 +15,36 @@ Install (GUI-only)
   - Or: pip install PySide6
 
 Run (development)
-- Ensure `src` is on PYTHONPATH. In repo root:
-  - python3 -m gui.app
-  - Or via helper: python3 scripts/run_gui.py
+- The GUI package lives under src/gui. Ensure that the repository's src/ directory
+  is on PYTHONPATH when you launch the app. From the repo root you can run either:
+  - PYTHONPATH=src python3 -m gui.app
+  - Or use the provided launcher that prepends src to sys.path automatically:
+    python3 scripts/run_gui.py
+
+Quick notes
+- The GUI requires PySide6; when not installed the app prints an explanatory message
+  and exits with a non-zero code.
+- If you prefer a native wrapper or entry-point, consider adding a console script
+  in pyproject.toml or a small shell wrapper that sets PYTHONPATH for you.
+
+New UI features
+- Standalone translation controls (Preprocess tab):
+  - Make English variant: request English Markdown creation.
+  - Translate-only: skip convert and translate existing Markdown under Source.
+  - Translator: choose engine (auto, marian_opus, ct2_nllb).
+  - Translate button: runs the translation phase and writes a JSON report under outputs/logs/.
+- Inline help buttons: question-mark (?) buttons next to key actions
+  (Plan / Run / Translate in Preprocess; Detect / Pseudonymize / De-anonymize in Anonymization).
+  Clicking a ? writes a short explanation into the tab's output area.
+
+Usage tips
+- Convert flow: set Source/Output and options, click Plan to preview, then Run.
+- Translate flow: set Source/Output, choose translation options, click Translate.
+  - Translate-only translates .md files under Source; otherwise it uses results from the last convert run.
+  - The report path is shown after a run; open it to inspect per-file outcomes.
 
 Tabs
-- Preprocess: plan and run convert-only Markdown pipeline (folder -> .md).
+- Preprocess: plan and run convert-only Markdown pipeline (folder -> .md) and translation.
 - Anonymization: detect, pseudonymize (with context), and de-anonymize sample text.
 - Jobs: placeholder for history and logs.
 - Settings: environment/session settings and preflight.
@@ -29,6 +53,7 @@ Service facade
 - gui.services.facade.GuiServices exposes small, stable methods used by views:
   - convert_plan(cfg) -> Plan
   - convert_run(cfg) -> RunResult
+  - translate_run(cfg, make_english, translate_only, translator?) -> {code, report}
   - anon_detect(text, language)
   - anon_pseudonymize(text, context_id, language)
   - anon_deanonymize(text, context_id)

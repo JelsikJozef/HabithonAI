@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -19,15 +18,21 @@ def test_cli_translate_only_offline(tmp_path, monkeypatch):
 
     # Run CLI main in translate-only mode (skip convert phase), offline
     argv = [
-        "--src", str(src),
-        "--out", str(out),
+        "--src",
+        str(src),
+        "--out",
+        str(out),
         "--translate-only",
         "--make-english",
-        "--workers", "1",
+        "--workers",
+        "1",
         "--overwrite",
-        "--log-level", "ERROR",
-        "--progress", "none",
-        "--report", str(report),
+        "--log-level",
+        "ERROR",
+        "--progress",
+        "none",
+        "--report",
+        str(report),
     ]
     code = cli.main(argv)
     assert code in (0, 1, 3)  # allow 3 when translation components unavailable

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
 import os
+from dataclasses import dataclass
 
 try:  # optional dependency
-    from dotenv import load_dotenv, find_dotenv  # type: ignore
+    from dotenv import find_dotenv, load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
+
     def load_dotenv(*args, **kwargs):  # type: ignore
         return False
+
     def find_dotenv(*args, **kwargs):  # type: ignore
         return ""
 
@@ -26,22 +27,24 @@ class Settings:
     openai_max_tokens: int = 512
     anonymization_include_text: bool = False
     # Language langid configuration
-    language_model_path: Optional[str] = None
+    language_model_path: str | None = None
     language_min_confidence: float = 0.3
     # Presidio configuration (adapter layer will propagate to anonymization)
-    presidio_langs: Optional[str] = None  # e.g., "en:en_core_web_sm,de:de_core_news_sm,sk:xx_ent_wiki_sm"
-    presidio_fallback_model: Optional[str] = None  # e.g., "xx_ent_wiki_sm"
-    presidio_patterns_path: Optional[str] = None  # path to JSON/YAML with custom recognizers
+    presidio_langs: str | None = (
+        None  # e.g., "en:en_core_web_sm,de:de_core_news_sm,sk:xx_ent_wiki_sm"
+    )
+    presidio_fallback_model: str | None = None  # e.g., "xx_ent_wiki_sm"
+    presidio_patterns_path: str | None = None  # path to JSON/YAML with custom recognizers
     presidio_disable_fallback: bool = False  # disable internal regex fallback
 
     @staticmethod
-    def _to_bool(s: Optional[str], default: bool = False) -> bool:
+    def _to_bool(s: str | None, default: bool = False) -> bool:
         if s is None:
             return default
         return str(s).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     @classmethod
-    def load(cls, *, use_dotenv: bool = True) -> "Settings":
+    def load(cls, *, use_dotenv: bool = True) -> Settings:
         """Load settings from the environment, optionally loading .env first.
 
         - Requires OPENAI_API_KEY; raises if missing.
@@ -77,7 +80,9 @@ class Settings:
             max_tokens = 512
         include_text = cls._to_bool(os.environ.get("ANON_INCLUDE_TEXT"), default=False)
         # Language langid config
-        lang_model_path = os.environ.get("LANGUAGE_MODEL_PATH") or os.environ.get("PREPROCESSING_FASTTEXT_MODEL")
+        lang_model_path = os.environ.get("LANGUAGE_MODEL_PATH") or os.environ.get(
+            "PREPROCESSING_FASTTEXT_MODEL"
+        )
         try:
             lang_min_conf = float(os.environ.get("LANGUAGE_MIN_CONFIDENCE", "0.5"))
         except Exception:
@@ -91,7 +96,9 @@ class Settings:
         presidio_langs = os.environ.get("ANON_PRESIDIO_LANGS")
         presidio_fallback = os.environ.get("ANON_PRESIDIO_FALLBACK_MODEL")
         presidio_patterns = os.environ.get("ANON_PRESIDIO_PATTERNS")
-        presidio_disable_fallback = cls._to_bool(os.environ.get("ANON_PRESIDIO_DISABLE_FALLBACK"), default=False)
+        presidio_disable_fallback = cls._to_bool(
+            os.environ.get("ANON_PRESIDIO_DISABLE_FALLBACK"), default=False
+        )
         return cls(
             openai_api_key=key,
             openai_model=model,

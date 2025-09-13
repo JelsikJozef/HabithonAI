@@ -1,6 +1,7 @@
 from __future__ import annotations
-from typing import List, Optional
+
 import re
+
 from anonymization.domain.entities import PiiEntity
 
 # German company suffixes
@@ -52,7 +53,9 @@ def _left_trim_to_company_start(text: str, start: int, end: int) -> int:
     return first_tok_start
 
 
-def trim_organization_entities(entities: List[PiiEntity], text: str, language: Optional[str]) -> List[PiiEntity]:
+def trim_organization_entities(
+    entities: list[PiiEntity], text: str, language: str | None
+) -> list[PiiEntity]:
     """Trim ORGANIZATION spans to exclude preceding lowercase phrases (German).
 
     For German, ensure ORGANIZATION spans start at the company name and include the
@@ -60,15 +63,23 @@ def trim_organization_entities(entities: List[PiiEntity], text: str, language: O
     """
     if not entities:
         return []
-    out: List[PiiEntity] = []
+    out: list[PiiEntity] = []
     for e in entities:
         if e.type != "ORGANIZATION" or language != "de":
             out.append(e)
             continue
         new_start = _left_trim_to_company_start(text, e.start, e.end)
         if new_start != e.start and new_start < e.end:
-            out.append(PiiEntity(type=e.type, start=new_start, end=e.end, value=text[new_start:e.end], score=e.score, detector=e.detector))
+            out.append(
+                PiiEntity(
+                    type=e.type,
+                    start=new_start,
+                    end=e.end,
+                    value=text[new_start : e.end],
+                    score=e.score,
+                    detector=e.detector,
+                )
+            )
         else:
             out.append(e)
     return out
-

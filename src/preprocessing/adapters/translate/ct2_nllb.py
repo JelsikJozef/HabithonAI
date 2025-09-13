@@ -27,13 +27,15 @@ Neither library is imported at module import time to keep this file importable
 when the environment lacks those dependencies. They are loaded on demand by
 load().
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+import hashlib
 import os
 import time
-import hashlib
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from preprocessing.domain.errors import TranslationError
 from preprocessing.domain.models_markdown import MarkdownDoc
@@ -71,10 +73,10 @@ class _EngineParams:
     length_penalty: float
     compute_type: str
     device: str
-    num_threads: Optional[int]
+    num_threads: int | None
     max_batch_size: int
     max_tokens: int
-    seed: Optional[int]
+    seed: int | None
 
 
 class NllbCTranslate2(TranslatePort):
@@ -101,23 +103,23 @@ class NllbCTranslate2(TranslatePort):
         self,
         model_dir: str,
         *,
-        src_lang_map: Dict[str, str] | None = None,
+        src_lang_map: dict[str, str] | None = None,
         tgt_lang_code: str = "eng_Latn",
         compute_type: str = "int8",
         device: str = "cpu",
-        num_threads: Optional[int] = None,
+        num_threads: int | None = None,
         beam_size: int = 4,
         length_penalty: float = 1.0,
         max_batch_size: int = 32,
         max_tokens: int = 256,
-        segmenter_options: Optional[Dict[str, Any]] = None,
+        segmenter_options: dict[str, Any] | None = None,
         pre_space_policy: str = "preserve",
         post_space_policy: str = "preserve",
         glossary_mode: str = "none",
         cache_enabled: bool = True,
-        seed: Optional[int] = None,
-        glossary: Optional[GlossaryPort] = None,
-        cache: Optional[CachePort] = None,
+        seed: int | None = None,
+        glossary: GlossaryPort | None = None,
+        cache: CachePort | None = None,
         segmenter: Any | None = None,
     ) -> None:
         """Construct a new adapter with lazy-loaded engine.
@@ -178,9 +180,19 @@ class NllbCTranslate2(TranslatePort):
         - Heavy resources are loaded lazily via :meth:`load`.
         """
         if not isinstance(model_dir, str) or not model_dir:
-            raise TranslationError("invalid settings", {"reason": "SETTINGS", "message": "model_dir must be a non-empty string"})
+            raise TranslationError(
+                "invalid settings",
+                {"reason": "SETTINGS", "message": "model_dir must be a non-empty string"},
+            )
         if not os.path.isdir(model_dir):
-            raise TranslationError("model not available", {"reason": "MODEL_LOAD_FAILED", "model_dir": model_dir, "message": "model directory not found"})
+            raise TranslationError(
+                "model not available",
+                {
+                    "reason": "MODEL_LOAD_FAILED",
+                    "model_dir": model_dir,
+                    "message": "model directory not found",
+                },
+            )
 
         self._model_dir = os.path.abspath(model_dir)
         self._src_lang_map = dict(
@@ -256,7 +268,9 @@ class NllbCTranslate2(TranslatePort):
 
         # Create translator
         try:
-            self._translator = ct2.Translator(self._model_dir, device=self._eng.device, compute_type=self._eng.compute_type)  # type: ignore[assignment]
+            self._translator = ct2.Translator(
+                self._model_dir, device=self._eng.device, compute_type=self._eng.compute_type
+            )  # type: ignore[assignment]
         except Exception as exc:  # pragma: no cover - depends on environment
             raise TranslationError(
                 "model not available",
@@ -278,7 +292,11 @@ class NllbCTranslate2(TranslatePort):
             # Some conversions store tokenizer.json; we require sentencepiece for NLLB
             raise TranslationError(
                 "tokenizer not available",
-                {"reason": "TOKENIZER_LOAD_FAILED", "message": "sentencepiece model file not found", "model_dir": self._model_dir},
+                {
+                    "reason": "TOKENIZER_LOAD_FAILED",
+                    "message": "sentencepiece model file not found",
+                    "model_dir": self._model_dir,
+                },
             )
 
         try:
@@ -320,9 +338,9 @@ class NllbCTranslate2(TranslatePort):
         doc: MarkdownDoc,
         src_lang: str,
         tgt_lang: str,
-        options: Optional[dict[str, Any]] = None,
+        options: dict[str, Any] | None = None,
         *,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> MarkdownDoc:
         """Translate only Markdown text nodes to English while preserving structure.
 
@@ -362,19 +380,27 @@ class NllbCTranslate2(TranslatePort):
         """
         # Validate target
         if (tgt_lang or "en").lower() != "en":
-            raise TranslationError("unsupported language pair", {"reason": "UNSUPPORTED_LANG", "src": src_lang, "tgt": tgt_lang})
+            raise TranslationError(
+                "unsupported language pair",
+                {"reason": "UNSUPPORTED_LANG", "src": src_lang, "tgt": tgt_lang},
+            )
         # Resolve source lang to NLLB tag
         if src_lang is None or src_lang.lower() == "auto":
-            raise TranslationError("source language required", {"reason": "UNSUPPORTED_LANG", "message": "src_lang must be explicit (not 'auto')"})
+            raise TranslationError(
+                "source language required",
+                {"reason": "UNSUPPORTED_LANG", "message": "src_lang must be explicit (not 'auto')"},
+            )
         src_lang_lc = src_lang.lower()
         if src_lang_lc not in self._src_lang_map:
-            raise TranslationError("unsupported language pair", {"reason": "UNSUPPORTED_LANG", "src": src_lang_lc})
+            raise TranslationError(
+                "unsupported language pair", {"reason": "UNSUPPORTED_LANG", "src": src_lang_lc}
+            )
         src_tag = self._src_lang_map[src_lang_lc]
         tgt_tag = self._tgt_lang_code
 
         # Prepare options (before any heavy load)
         opts = dict(options or {})
-        glossary_id: Optional[str] = opts.get("glossary_id")
+        glossary_id: str | None = opts.get("glossary_id")
         seg_opts = dict(self._segmenter_options)
         if "max_segment_chars" in opts and opts["max_segment_chars"] is not None:
             seg_opts["segment_max_chars"] = int(opts["max_segment_chars"])  # alias
@@ -393,11 +419,18 @@ class NllbCTranslate2(TranslatePort):
         # 1) Segment Markdown (no model load yet)
         t_seg0 = time.perf_counter()
         try:
-            segments, plan = (self._segmenter or mdseg).extract_segments(doc.text_md, options=seg_opts)
+            segments, plan = (self._segmenter or mdseg).extract_segments(
+                doc.text_md, options=seg_opts
+            )
         except mdseg.SegmentationError as exc:
-            raise TranslationError("segmentation failed", {"reason": "SEGMENT_FAILED", "message": str(exc)})
+            raise TranslationError(
+                "segmentation failed", {"reason": "SEGMENT_FAILED", "message": str(exc)}
+            )
         except Exception as exc:
-            raise TranslationError("segmentation failed", {"reason": "SEGMENT_FAILED", "message": exc.__class__.__name__})
+            raise TranslationError(
+                "segmentation failed",
+                {"reason": "SEGMENT_FAILED", "message": exc.__class__.__name__},
+            )
         t_seg1 = time.perf_counter()
 
         # Short-circuit if nothing to translate (still no model load)
@@ -415,7 +448,12 @@ class NllbCTranslate2(TranslatePort):
                 "fingerprint": self._fingerprint,
             }
             meta.setdefault("langs", {})
-            meta["langs"] = {"src": src_lang_lc, "src_tag": src_tag, "tgt": "en", "tgt_tag": tgt_tag}
+            meta["langs"] = {
+                "src": src_lang_lc,
+                "src_tag": src_tag,
+                "tgt": "en",
+                "tgt_tag": tgt_tag,
+            }
             meta["segments"] = {
                 "total": 0,
                 "cached": 0,
@@ -437,9 +475,19 @@ class NllbCTranslate2(TranslatePort):
         def apply_glossary_pre(text: str) -> str:
             if self._glossary and self._glossary_mode in {"pre", "both"}:
                 try:
-                    return self._glossary.apply(text, src_lang=src_lang_lc, tgt_lang="en", mode="pre", glossary_id=glossary_id)
-                except Exception as exc:  # Keep glossary failures contained under translation umbrella
-                    raise TranslationError("glossary failed", {"reason": "GLOSSARY_FAILED", "message": str(exc)})
+                    return self._glossary.apply(
+                        text,
+                        src_lang=src_lang_lc,
+                        tgt_lang="en",
+                        mode="pre",
+                        glossary_id=glossary_id,
+                    )
+                except (
+                    Exception
+                ) as exc:  # Keep glossary failures contained under translation umbrella
+                    raise TranslationError(
+                        "glossary failed", {"reason": "GLOSSARY_FAILED", "message": str(exc)}
+                    )
             return text
 
         # 3) Cache + batch plan (deterministic)
@@ -447,18 +495,20 @@ class NllbCTranslate2(TranslatePort):
         total = len(segments)
         cached = 0
         batched = 0
-        translated_map: Dict[str, str] = {}
-        to_translate: List[Tuple[str, str]] = []  # (seg_id, text)
+        translated_map: dict[str, str] = {}
+        to_translate: list[tuple[str, str]] = []  # (seg_id, text)
 
         for seg in segments:
             seg_text = apply_glossary_pre(seg.text)
-            cache_val: Optional[str] = None
+            cache_val: str | None = None
             if self._cache and self._cache_enabled:
                 key = self._make_cache_key(seg_text, src_tag, tgt_tag, engine_key, glossary_id)
                 try:
                     cache_val = self._cache.get(key)
                 except Exception:
-                    cache_val = None  # Cache failures are non-fatal here; continue deterministically
+                    cache_val = (
+                        None  # Cache failures are non-fatal here; continue deterministically
+                    )
             if cache_val is not None:
                 translated_map[seg.id] = cache_val
                 cached += 1
@@ -466,7 +516,9 @@ class NllbCTranslate2(TranslatePort):
                 to_translate.append((seg.id, seg_text))
 
         # Load model/tokenizer only if there are misses to translate
-        if to_translate and (self._translator is None or self._sp is None or self._fingerprint is None):
+        if to_translate and (
+            self._translator is None or self._sp is None or self._fingerprint is None
+        ):
             self.load()
 
         # 4) Batch translate misses deterministically
@@ -474,8 +526,8 @@ class NllbCTranslate2(TranslatePort):
         if to_translate:
             # Enforce token limits by splitting inside adapter, then re-joining per original id
             # We translate in batches over subparts and reassemble by original segment id.
-            batch_texts: List[str] = []
-            batch_ids: List[str] = []  # original seg id for each subpart
+            batch_texts: list[str] = []
+            batch_ids: list[str] = []  # original seg id for each subpart
 
             for seg_id, text in to_translate:
                 # Encode to tokens to check length; split conservatively by sentences/words
@@ -485,25 +537,34 @@ class NllbCTranslate2(TranslatePort):
                     batch_ids.append(seg_id)
 
             # Execute in fixed-size batches
-            out_texts: List[str] = []
-            out_ids: List[str] = []
+            out_texts: list[str] = []
+            out_ids: list[str] = []
             for i in range(0, len(batch_texts), self._eng.max_batch_size):
                 sl = slice(i, min(i + self._eng.max_batch_size, len(batch_texts)))
                 chunk_inputs = batch_texts[sl]
                 chunk_ids = batch_ids[sl]
                 try:
-                    chunk_outputs = self._translate_batch_texts(chunk_inputs, src_tag=src_tag, tgt_tag=tgt_tag)
+                    chunk_outputs = self._translate_batch_texts(
+                        chunk_inputs, src_tag=src_tag, tgt_tag=tgt_tag
+                    )
                 except TranslationError:
                     raise
                 except Exception as exc:
-                    raise TranslationError("batch failed", {"reason": "BATCH_FAILED", "message": str(exc.__class__.__name__), "count": len(chunk_inputs)})
+                    raise TranslationError(
+                        "batch failed",
+                        {
+                            "reason": "BATCH_FAILED",
+                            "message": str(exc.__class__.__name__),
+                            "count": len(chunk_inputs),
+                        },
+                    )
                 out_texts.extend(chunk_outputs)
                 out_ids.extend(chunk_ids)
                 batched += 1
 
             # Reassemble subparts into full segment translations
             assert len(out_texts) == len(out_ids)
-            per_seg: Dict[str, List[str]] = {}
+            per_seg: dict[str, list[str]] = {}
             for sid, txt in zip(out_ids, out_texts):
                 per_seg.setdefault(sid, []).append(txt)
             for sid, parts in per_seg.items():
@@ -511,29 +572,52 @@ class NllbCTranslate2(TranslatePort):
                 # 5) Post-glossary if configured
                 if self._glossary and self._glossary_mode in {"post", "both"}:
                     try:
-                        full = self._glossary.apply(full, src_lang=src_lang_lc, tgt_lang="en", mode="post", glossary_id=glossary_id)
+                        full = self._glossary.apply(
+                            full,
+                            src_lang=src_lang_lc,
+                            tgt_lang="en",
+                            mode="post",
+                            glossary_id=glossary_id,
+                        )
                     except Exception as exc:
-                        raise TranslationError("glossary failed", {"reason": "GLOSSARY_FAILED", "message": str(exc)})
+                        raise TranslationError(
+                            "glossary failed", {"reason": "GLOSSARY_FAILED", "message": str(exc)}
+                        )
                 translated_map[sid] = full
 
                 # Populate cache
                 if self._cache and self._cache_enabled:
                     try:
-                        key = self._make_cache_key(apply_glossary_pre(self._find_original_text(segments, sid)), src_tag, tgt_tag, engine_key, glossary_id)
+                        key = self._make_cache_key(
+                            apply_glossary_pre(self._find_original_text(segments, sid)),
+                            src_tag,
+                            tgt_tag,
+                            engine_key,
+                            glossary_id,
+                        )
                         self._cache.put(key, full)
                     except Exception:
                         pass  # cache failures are non-fatal
         t_tr1 = time.perf_counter()
 
         # 6) Recombine into Markdown
-        translated_items = [{"id": sid, "text": translated_map[sid]} for sid in (e.id for e in segments)]
+        translated_items = [
+            {"id": sid, "text": translated_map[sid]} for sid in (e.id for e in segments)
+        ]
         t_rc0 = time.perf_counter()
         try:
-            md_text_en = (self._segmenter or mdseg).recombine(doc.text_md, translated_items, plan, options={})
+            md_text_en = (self._segmenter or mdseg).recombine(
+                doc.text_md, translated_items, plan, options={}
+            )
         except mdseg.RecombinationError as exc:
-            raise TranslationError("recompose failed", {"reason": "RECOMPOSE_FAILED", "message": str(exc)})
+            raise TranslationError(
+                "recompose failed", {"reason": "RECOMPOSE_FAILED", "message": str(exc)}
+            )
         except Exception as exc:
-            raise TranslationError("recompose failed", {"reason": "RECOMPOSE_FAILED", "message": str(exc.__class__.__name__)})
+            raise TranslationError(
+                "recompose failed",
+                {"reason": "RECOMPOSE_FAILED", "message": str(exc.__class__.__name__)},
+            )
         t_rc1 = time.perf_counter()
 
         # 7) Assemble output MarkdownDoc with metadata
@@ -595,7 +679,9 @@ class NllbCTranslate2(TranslatePort):
     # Internal helpers
     # -----------------------------
 
-    def _translate_batch_texts(self, batch_texts: List[str], src_tag: str, tgt_tag: str) -> List[str]:
+    def _translate_batch_texts(
+        self, batch_texts: list[str], src_tag: str, tgt_tag: str
+    ) -> list[str]:
         """Translate a batch of plain text segments deterministically.
 
         Behavioral contract
@@ -633,7 +719,7 @@ class NllbCTranslate2(TranslatePort):
         assert self._translator is not None and self._sp is not None
 
         # Prepare tokenized inputs with source tag prefix
-        inputs_tok: List[List[str]] = []
+        inputs_tok: list[list[str]] = []
         for txt in batch_texts:
             # Encode to sentencepiece pieces; keep as strings for CT2
             pieces = list(self._sp.EncodeAsPieces(txt))  # type: ignore[attr-defined]
@@ -658,10 +744,17 @@ class NllbCTranslate2(TranslatePort):
                 num_threads=self._eng.num_threads,
             )
         except Exception as exc:
-            raise TranslationError("batch failed", {"reason": "BATCH_FAILED", "message": str(exc.__class__.__name__), "count": len(batch_texts)})
+            raise TranslationError(
+                "batch failed",
+                {
+                    "reason": "BATCH_FAILED",
+                    "message": str(exc.__class__.__name__),
+                    "count": len(batch_texts),
+                },
+            )
 
         # Extract the single hypothesis and detokenize via sentencepiece
-        outputs: List[str] = []
+        outputs: list[str] = []
         try:
             for res in results:
                 # Each result has hypotheses as list of token lists
@@ -672,14 +765,24 @@ class NllbCTranslate2(TranslatePort):
                 text = self._sp.DecodePieces(tokens)  # type: ignore[attr-defined]
                 outputs.append(text)
         except Exception as exc:
-            raise TranslationError("batch failed", {"reason": "BATCH_FAILED", "message": str(exc.__class__.__name__)})
+            raise TranslationError(
+                "batch failed", {"reason": "BATCH_FAILED", "message": str(exc.__class__.__name__)}
+            )
 
         if len(outputs) != len(batch_texts):
-            raise TranslationError("batch failed", {"reason": "BATCH_FAILED", "message": "mismatched outputs", "got": len(outputs), "exp": len(batch_texts)})
+            raise TranslationError(
+                "batch failed",
+                {
+                    "reason": "BATCH_FAILED",
+                    "message": "mismatched outputs",
+                    "got": len(outputs),
+                    "exp": len(batch_texts),
+                },
+            )
 
         return outputs
 
-    def _split_by_tokens(self, text: str, max_tokens: int) -> List[str]:
+    def _split_by_tokens(self, text: str, max_tokens: int) -> list[str]:
         """Split text into subparts so each subpart encodes to <= max_tokens tokens.
 
         Strategy
@@ -710,7 +813,7 @@ class NllbCTranslate2(TranslatePort):
         # Fallback deterministic splitter on characters with sentence/space hints
         import re
 
-        spans: List[Tuple[int, int]] = []
+        spans: list[tuple[int, int]] = []
         start = 0
         L = len(text)
         while start < L:
@@ -729,7 +832,7 @@ class NllbCTranslate2(TranslatePort):
             spans.append((start, end))
             start = end
 
-        parts: List[str] = []
+        parts: list[str] = []
         for a, b in spans:
             chunk = text[a:b]
             # Ensure each chunk meets token budget; shrink if necessary
@@ -752,7 +855,7 @@ class NllbCTranslate2(TranslatePort):
                 parts.append(sub)
                 sub_start = sub_end
         # Final pass: merge adjacent tiny parts when possible under budget
-        merged: List[str] = []
+        merged: list[str] = []
         for txt in parts:
             if not merged:
                 merged.append(txt)
@@ -764,14 +867,18 @@ class NllbCTranslate2(TranslatePort):
                 merged.append(txt)
         return merged
 
-    def _make_cache_key(self, text: str, src_tag: str, tgt_tag: str, engine_key: str, glossary_id: Optional[str]) -> str:
+    def _make_cache_key(
+        self, text: str, src_tag: str, tgt_tag: str, engine_key: str, glossary_id: str | None
+    ) -> str:
         """Return a deterministic cache key for one input segment.
 
         Format: sha256 of a stable tuple (text, src_tag, tgt_tag, engine_key, glossary_id or "").
         """
         h = hashlib.sha256()
         # Use ASCII unit separator to avoid collisions
-        payload = "\x1f".join([text, src_tag, tgt_tag, engine_key, glossary_id or ""]).encode("utf-8")
+        payload = "\x1f".join([text, src_tag, tgt_tag, engine_key, glossary_id or ""]).encode(
+            "utf-8"
+        )
         h.update(payload)
         return h.hexdigest()
 
@@ -781,7 +888,7 @@ class NllbCTranslate2(TranslatePort):
         Combines the model directory basename, compute_type, device, and a short
         hash of file names and sizes/mtimes inside the model directory.
         """
-        entries: List[Tuple[str, int, int]] = []
+        entries: list[tuple[str, int, int]] = []
         try:
             for name in sorted(os.listdir(self._model_dir)):
                 p = os.path.join(self._model_dir, name)
@@ -804,4 +911,3 @@ class NllbCTranslate2(TranslatePort):
             if getattr(s, "id", None) == seg_id:
                 return getattr(s, "text", "")
         return ""
-

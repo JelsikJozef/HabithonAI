@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +19,7 @@ class RawDocument:
     size: int
     mtime: datetime
     ext: str
-    meta: Dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:  # type: ignore[override]
         # Validate size
@@ -30,7 +30,7 @@ class RawDocument:
         if normalized != self.ext:
             object.__setattr__(self, "ext", normalized)
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (no file contents)."""
         return {
             "path": str(self.path),
@@ -40,7 +40,7 @@ class RawDocument:
             "meta": dict(self.meta),
         }
 
-    def with_meta(self, **kwargs: Any) -> "RawDocument":
+    def with_meta(self, **kwargs: Any) -> RawDocument:
         """Return an immutable copy with merged metadata."""
         new_meta = {**self.meta, **kwargs}
         return replace(self, meta=new_meta)
@@ -52,11 +52,11 @@ class ParsedDocument:
 
     text: str
     source: RawDocument
-    charset: Optional[str] = None
-    language: Optional[str] = None
-    hash: Optional[str] = None
-    tokens: Optional[int] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    charset: str | None = None
+    language: str | None = None
+    hash: str | None = None
+    tokens: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:  # type: ignore[override]
         if self.tokens is not None and self.tokens < 0:
@@ -86,7 +86,7 @@ class ParsedDocument:
                 cut = i
         return s[:cut].rstrip() + "..."
 
-    def to_record(self) -> Dict[str, Any]:
+    def to_record(self) -> dict[str, Any]:
         """Return a complete record suitable for JSONL output."""
         return {
             "text": self.text,

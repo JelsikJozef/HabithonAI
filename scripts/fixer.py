@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 """
 Fixer mojibake názvov súborov/priečinkov (UTF-8, stredná Európa, SK/CZ + TR)
@@ -21,7 +20,7 @@ import re
 import sys
 import unicodedata
 from collections import defaultdict
-from typing import Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 # --- Pomocné: stdout do UTF-8 (ak Python 3.7+ a na Linuxe) ---
 try:
@@ -44,57 +43,76 @@ class WeirdSequenceFixerExt:
     """
 
     # 1) Kontextové "kombinátory"
-    COMBINERS: Dict[str, Dict[str, str]] = {
+    COMBINERS: dict[str, dict[str, str]] = {
         "╠Б": {  # akút
-            "a": "á", "e": "é", "i": "í", "o": "ó", "u": "ú", "y": "ý",
-            "A": "Á", "E": "É", "I": "Í", "O": "Ó", "U": "Ú", "Y": "Ý",
-            "l": "ĺ", "L": "Ĺ"
+            "a": "á",
+            "e": "é",
+            "i": "í",
+            "o": "ó",
+            "u": "ú",
+            "y": "ý",
+            "A": "Á",
+            "E": "É",
+            "I": "Í",
+            "O": "Ó",
+            "U": "Ú",
+            "Y": "Ý",
+            "l": "ĺ",
+            "L": "Ĺ",
         },
         "╠М": {  # mäkčeň / háček
-            "c": "č", "s": "š", "z": "ž", "C": "Č", "S": "Š", "Z": "Ž",
-            "l": "ľ", "L": "Ľ", "t": "ť", "T": "Ť", "d": "ď", "D": "Ď",
-            "n": "ň", "N": "Ň", "r": "ř", "R": "Ř"
+            "c": "č",
+            "s": "š",
+            "z": "ž",
+            "C": "Č",
+            "S": "Š",
+            "Z": "Ž",
+            "l": "ľ",
+            "L": "Ľ",
+            "t": "ť",
+            "T": "Ť",
+            "d": "ď",
+            "D": "Ď",
+            "n": "ň",
+            "N": "Ň",
+            "r": "ř",
+            "R": "Ř",
         },
-        "╠И": {  # prehláska
-            "a": "ä", "o": "ö", "u": "ü", "A": "Ä", "O": "Ö", "U": "Ü"
-        },
+        "╠И": {"a": "ä", "o": "ö", "u": "ü", "A": "Ä", "O": "Ö", "U": "Ü"},  # prehláska
     }
 
     # 2) Priame náhrady (validované na tvojich ukážkach)
-    REPLACEMENTS: Dict[str, str] = {
+    REPLACEMENTS: dict[str, str] = {
         # EN/typografia
-        "┬┤": "'",          # Landlord's
-        "´": "",           # blúdiaci spacing-acute
-        "┬╖": "•",         # bullet
+        "┬┤": "'",  # Landlord's
+        "´": "",  # blúdiaci spacing-acute
+        "┬╖": "•",  # bullet
         "꞉": ":",
-
         # SK/CZ (špecifické mojibake)
-        "├┤": "ô",         # Dôvera
-        "─║": "ĺ",         # predĺženie
-        "─П": "ď",         # výpoveď
-        "─М": "Č",          # Čestné
-        "─Н": "č",          # činnosti
+        "├┤": "ô",  # Dôvera
+        "─║": "ĺ",  # predĺženie
+        "─П": "ď",  # výpoveď
+        "─М": "Č",  # Čestné
+        "─Н": "č",  # činnosti
         "┼б": "č",  # Čestné
-        "─З": "ć",         # Kovačević
-        "├Н": "Í",         # MARKÍZA
-        "┼а": "Š",         # PRERUŠENÝ
-        "├Й": "Ý",         # PRERUŠENÝ
-        "┼д": "ť",         # ŽIADOSŤ
-        "─╛": "ľ",         #tabuľky
-        "├й": "ý",         # Ktorý
-        "├║": "ú",         # spadajú
-        "├б": "á",          # pracovná
-        "┼╛": "ž",         # Žiadosť
-        "┼╜": "ž",         # Žiadosť
-        "┼е": "ť",         # Žiadosť
-        "├н": "í",         # príplatky
-        "tАУ": "–",        # en dash (UTF-8 → cp1251 mojibake)
-
-        #Nemčina (podľa ukážok)
-        "├Я":"ß",  # ß (nemecké dlhé s)
-        "├д":"ä",  # ä (nemecké prehláskované a)
-        "├╝":"ü",  # ü (nemecké prehláskované u)
-
+        "─З": "ć",  # Kovačević
+        "├Н": "Í",  # MARKÍZA
+        "┼а": "Š",  # PRERUŠENÝ
+        "├Й": "Ý",  # PRERUŠENÝ
+        "┼д": "ť",  # ŽIADOSŤ
+        "─╛": "ľ",  # tabuľky
+        "├й": "ý",  # Ktorý
+        "├║": "ú",  # spadajú
+        "├б": "á",  # pracovná
+        "┼╛": "ž",  # Žiadosť
+        "┼╜": "ž",  # Žiadosť
+        "┼е": "ť",  # Žiadosť
+        "├н": "í",  # príplatky
+        "tАУ": "–",  # en dash (UTF-8 → cp1251 mojibake)
+        # Nemčina (podľa ukážok)
+        "├Я": "ß",  # ß (nemecké dlhé s)
+        "├д": "ä",  # ä (nemecké prehláskované a)
+        "├╝": "ü",  # ü (nemecké prehláskované u)
         # Turečtina/poľština/rumunčina (podľa ukážok)
         "┼Ю": "Ş",  # Ş
         "┼Я": "ş",  # ş
@@ -105,10 +123,9 @@ class WeirdSequenceFixerExt:
         "├Ц": "Ö",  # Ö
         "─░": "İ",  # İ (tur. veľké I s bodkou)
         "─Г": "ă",  # rum. ă
-
         # medzery
-        "\u00A0": " ",     # NBSP
-        "\u202F": " ",     # NNBSP / thin NBSP
+        "\u00a0": " ",  # NBSP
+        "\u202f": " ",  # NNBSP / thin NBSP
     }
 
     # re pre “písmeno + (kombinátor)”
@@ -152,24 +169,51 @@ class WeirdSequenceFixerExt:
 # ==================================
 # 2) Renamer + ukážky výskytov
 # ==================================
-COMMON_WEIRD_TOKENS: List[str] = [
+COMMON_WEIRD_TOKENS: list[str] = [
     # kľúče z REPLACEMENTS + často sa vyskytujúce markery
-    "┬┤", "´", "┬╖", "꞉",
-    "├┤", "─║", "─П", "─М", "─З", "├Н", "┼а", "├Й", "┼д",
+    "┬┤",
+    "´",
+    "┬╖",
+    "꞉",
+    "├┤",
+    "─║",
+    "─П",
+    "─М",
+    "─З",
+    "├Н",
+    "┼а",
+    "├Й",
+    "┼д",
     "tАУ",
-    "┼Ю", "┼Я", "├З", "├з", "├╢", "┼Д", "├Ц", "─░", "─Г",
-    "\u00A0", "\u202F",
+    "┼Ю",
+    "┼Я",
+    "├З",
+    "├з",
+    "├╢",
+    "┼Д",
+    "├Ц",
+    "─░",
+    "─Г",
+    "\u00a0",
+    "\u202f",
     # kombinátory – hľadáme ich samostatne
-    "╠Б", "╠М", "╠И",
+    "╠Б",
+    "╠М",
+    "╠И",
     # ďalšie z tvojich výpisov, ktoré nechávame na manuálne posúdenie
-    "┬╖", "╨Ф", "╨", "цП", "Рф", "║д", "уВ│", "уГ╝"
+    "┬╖",
+    "╨Ф",
+    "╨",
+    "цП",
+    "Рф",
+    "║д",
+    "уВ│",
+    "уГ╝",
 ]
 
 
 class NameFixer:
-    def __init__(self,
-                 include: Optional[re.Pattern] = None,
-                 exclude: Optional[re.Pattern] = None):
+    def __init__(self, include: re.Pattern | None = None, exclude: re.Pattern | None = None):
         self.ext = WeirdSequenceFixerExt()
         self.include = include
         self.exclude = exclude
@@ -188,7 +232,7 @@ class NameFixer:
         fixed = self.ext.fix_name(base)
         return fixed
 
-    def walk_paths(self, root: str) -> Iterable[Tuple[str, bool]]:
+    def walk_paths(self, root: str) -> Iterable[tuple[str, bool]]:
         """Yielduje (cesta, is_dir). Použijeme topdown=False, aby sme menili dirs až po files."""
         for dirpath, dirnames, filenames in os.walk(root, topdown=False):
             # súbory
@@ -202,9 +246,9 @@ class NameFixer:
                 if self._allowed(old):
                     yield old, True
 
-    def plan(self, root: str) -> List[Tuple[str, str, bool]]:
+    def plan(self, root: str) -> list[tuple[str, str, bool]]:
         """Vytvor plán premenovaní: (old_abs, new_abs, is_dir) – len ak by sa zmenil názov."""
-        actions: List[Tuple[str, str, bool]] = []
+        actions: list[tuple[str, str, bool]] = []
         for old, is_dir in self.walk_paths(root):
             parent = os.path.dirname(old)
             new_name = self.propose(old)
@@ -220,7 +264,7 @@ class NameFixer:
             actions.append((old, new_abs, is_dir))
         return actions
 
-    def apply(self, actions: List[Tuple[str, str, bool]]) -> None:
+    def apply(self, actions: list[tuple[str, str, bool]]) -> None:
         """Vykonaj premenovania (dirs aj files už v správnom poradí, keďže plan používa topdown=False)."""
         for old, new, is_dir in actions:
             try:
@@ -230,13 +274,13 @@ class NameFixer:
                 print(f"❌  Zlyhalo premenovanie:\n{old}\n -> {new}\n   {e}\n", file=sys.stderr)
 
     # ---------- Ukážky výskytov ----------
-    def show_examples(self, root: str, tokens: List[str], max_examples: int = 10) -> None:
+    def show_examples(self, root: str, tokens: list[str], max_examples: int = 10) -> None:
         """
         Vyhľadá a vypíše príklady, kde sa nachádzajú dané 'tokens' (podreťazce).
         Zobrazí počty + max N ukážok na token.
         """
-        counts: Dict[str, int] = defaultdict(int)
-        samples: Dict[str, List[str]] = defaultdict(list)
+        counts: dict[str, int] = defaultdict(int)
+        samples: dict[str, list[str]] = defaultdict(list)
 
         def maybe_add(token: str, fullpath: str, is_dir: bool):
             base = os.path.basename(fullpath)
@@ -288,13 +332,25 @@ class NameFixer:
 # 3) CLI
 # =========================
 def main():
-    ap = argparse.ArgumentParser(description="Fixer názvov (mojibake) – dry-run/premenovanie/ukážky výskytov.")
+    ap = argparse.ArgumentParser(
+        description="Fixer názvov (mojibake) – dry-run/premenovanie/ukážky výskytov."
+    )
     ap.add_argument("--root", default=".", help="Koreňový priečinok (default: .)")
     ap.add_argument("--apply", action="store_true", help="NAOZAJ premenuj (inak len dry-run).")
-    ap.add_argument("--show-examples", action="store_true", help="Vypíš príklady výskytu problematických sekvencií.")
-    ap.add_argument("--tokens", nargs="*", default=None,
-                    help="Vlastný zoznam tokenov pre --show-examples. Ak neuvedieš, použije sa vstavaný.")
-    ap.add_argument("--max-examples", type=int, default=10, help="Koľko ukážok max na token (default 10).")
+    ap.add_argument(
+        "--show-examples",
+        action="store_true",
+        help="Vypíš príklady výskytu problematických sekvencií.",
+    )
+    ap.add_argument(
+        "--tokens",
+        nargs="*",
+        default=None,
+        help="Vlastný zoznam tokenov pre --show-examples. Ak neuvedieš, použije sa vstavaný.",
+    )
+    ap.add_argument(
+        "--max-examples", type=int, default=10, help="Koľko ukážok max na token (default 10)."
+    )
     ap.add_argument("--include", default=None, help="Regex – spracuj len cesty, ktoré mu vyhovujú.")
     ap.add_argument("--exclude", default=None, help="Regex – vynechaj cesty, ktoré mu vyhovujú.")
 

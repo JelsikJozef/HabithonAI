@@ -25,48 +25,62 @@ Forward-compatible factories are defined but may raise NotConfigured unless
 explicitly enabled. These are placeholders for future pipeline stages and are
 implemented with an offline-first policy (no egress by default).
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional, Tuple, List
 import importlib
 import logging
 import os
 import shutil
 import threading
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 # Settings and domain errors
 from .settings import Settings, SettingsError
+
 try:
     from ..domain.errors import PreprocessingError
 except Exception:  # pragma: no cover - fallback in isolation
+
     class PreprocessingError(Exception):
         """Base exception for preprocessing errors (fallback)."""
 
+
 # Domain ports for typing only
 try:
-    from ..domain.ports import ParserRegistryPort, OcrPort, SerializerPort
+    from ..domain.ports import OcrPort, ParserRegistryPort, SerializerPort
 except Exception:  # pragma: no cover - typing fallback
     from typing import Protocol
 
     class ParserRegistryPort(Protocol):  # type: ignore
-        def get(self, ext: str) -> Any: ...
-        def supported(self) -> set[str]: ...
+        def get(self, ext: str) -> Any:
+            ...
+
+        def supported(self) -> set[str]:
+            ...
 
     class OcrPort(Protocol):  # type: ignore
-        def run(self, input_path: Path, *, languages: tuple[str, ...]) -> str: ...
+        def run(self, input_path: Path, *, languages: tuple[str, ...]) -> str:
+            ...
 
     class SerializerPort(Protocol):  # type: ignore
-        def append(self, record: dict) -> None: ...
-        def close(self) -> None: ...
+        def append(self, record: dict) -> None:
+            ...
+
+        def close(self) -> None:
+            ...
+
 
 # Concrete parser registry and adapters
-from ..adapters.parsers.registry import ParserRegistry
 from ..adapters.parsers.docx_to_md import DocxToMd
-from ..adapters.parsers.xlsx_to_md import XlsxToMd
-from ..adapters.parsers.pdf_to_md import PdfToMd
 from ..adapters.parsers.jpg_to_md import JpgToMd
+from ..adapters.parsers.pdf_to_md import PdfToMd
+from ..adapters.parsers.registry import ParserRegistry
+from ..adapters.parsers.xlsx_to_md import XlsxToMd
+
 try:
     from ..adapters.parsers.msg_to_md import MsgToMd  # optional
 except Exception:  # pragma: no cover - optional adapter
@@ -210,7 +224,10 @@ class _MarkdownFileSerializer(SerializerPort):
             sidecar = out_path.with_suffix(".meta.json")
             try:
                 import json
-                json.dump(record, sidecar.open("w", encoding="utf-8"), ensure_ascii=False, sort_keys=True)
+
+                json.dump(
+                    record, sidecar.open("w", encoding="utf-8"), ensure_ascii=False, sort_keys=True
+                )
             except Exception as e:  # pragma: no cover - best-effort
                 raise FactoryError(f"failed to write sidecar metadata: {sidecar}: {e}") from e
         # Inline mode is out-of-scope for this lightweight serializer; documented only.
@@ -277,6 +294,7 @@ def _check_binary_available(name: str) -> bool:
 
 
 # ----- Public factories -----
+
 
 def make_parsers_registry(settings: Settings) -> ParserRegistryPort:
     """Build the Markdown parsers registry with deterministic, offline adapters.
@@ -386,10 +404,7 @@ def make_parsers_registry(settings: Settings) -> ParserRegistryPort:
     try:
         _logger.info(
             "parsers wired: %s",
-            {
-                k: getattr(v, "name", v.__class__.__name__)
-                for k, v in static_map.items()
-            },
+            {k: getattr(v, "name", v.__class__.__name__) for k, v in static_map.items()},
         )
     except Exception:  # pragma: no cover - logging must not break wiring
         pass
@@ -425,7 +440,9 @@ def make_encoding_normalizer(settings: Settings) -> _EncodingNormalizer:
         raise SettingsError(
             f"normalize_eol must be 'lf' or 'keep' (got: {settings.normalize_eol!r})"
         )
-    return _EncodingNormalizer(utf8_enforce=bool(settings.utf8_enforce), eol_policy=str(settings.normalize_eol))
+    return _EncodingNormalizer(
+        utf8_enforce=bool(settings.utf8_enforce), eol_policy=str(settings.normalize_eol)
+    )
 
 
 def make_markdown_serializer(settings: Settings) -> SerializerPort:
@@ -526,6 +543,7 @@ def make_ocr_engine(settings: Settings) -> OcrPort | None:
 
 # ----- Forward-compatible factories (placeholders; offline by default) -----
 
+
 def make_translator(settings: Settings) -> Any:
     """Return a translator adapter according to Settings (offline by default).
 
@@ -586,6 +604,7 @@ def make_vector_db(settings: Settings) -> Any:
 
 # ----- Preflight and teardown -----
 
+
 def preflight(settings: Settings) -> list[str]:
     """Run dependency checks and return warnings; raise on hard failures.
 
@@ -617,7 +636,7 @@ def preflight(settings: Settings) -> list[str]:
         - This function is idempotent and has no side effects (does not create
           directories or write files).
     """
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     # Check out_dir writability without creating it
     out_dir = settings.out_dir
@@ -698,4 +717,3 @@ __all__ = [
     "preflight",
     "teardown",
 ]
-

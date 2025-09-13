@@ -1,10 +1,10 @@
-from typing import List, Optional
 from fastapi import FastAPI
 from pydantic import BaseModel
+
 from ..adapters.container import build_default
+from ..app.denomize import deanonymize
 from ..app.detect import detect_all
 from ..app.pseudonymize import pseudonymize
-from ..app.denomize import deanonymize
 
 app = FastAPI(title="Anonymization API", version="0.1.0")
 
@@ -16,8 +16,8 @@ class PiiEntityModel(BaseModel):
     start: int
     end: int
     value: str
-    score: Optional[float] = None
-    detector: Optional[str] = None
+    score: float | None = None
+    detector: str | None = None
 
 
 class TokenMappingModel(BaseModel):
@@ -28,24 +28,24 @@ class TokenMappingModel(BaseModel):
 
 class DetectRequest(BaseModel):
     text: str
-    language: Optional[str] = None
+    language: str | None = None
 
 
 class DetectResponse(BaseModel):
     text: str
-    entities: List[PiiEntityModel]
+    entities: list[PiiEntityModel]
 
 
 class PseudonymizeRequest(BaseModel):
     text: str
     context_id: str
-    language: Optional[str] = None
+    language: str | None = None
 
 
 class PseudonymizeResponse(BaseModel):
     original_text: str
     pseudonymized_text: str
-    mappings: List[TokenMappingModel]
+    mappings: list[TokenMappingModel]
 
 
 class DeAnonymizeRequest(BaseModel):
@@ -56,7 +56,7 @@ class DeAnonymizeRequest(BaseModel):
 class DeAnonymizeResponse(BaseModel):
     anonymized_text: str
     restored_text: str
-    mappings_used: List[TokenMappingModel]
+    mappings_used: list[TokenMappingModel]
 
 
 @app.get("/health")

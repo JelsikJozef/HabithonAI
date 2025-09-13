@@ -9,18 +9,20 @@ Capabilities:
 
 This module performs local filesystem operations only; no network access.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Literal, Mapping, MutableMapping, Optional, Sequence
 import io
 import json
 import os
 import re
 import shutil
 import tempfile
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
+from typing import Any, Literal
 
 __all__ = [
     "MarkdownSerializerPort",
@@ -82,7 +84,7 @@ class WriterContext:
     write_meta: Literal["none", "sidecar", "inline"] = "sidecar"
     overwrite: bool = False
     dry_run: bool = False
-    ensure_final_newline: Optional[bool] = None
+    ensure_final_newline: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -98,7 +100,7 @@ class TargetPaths:
 
     out_md_path: str
     assets_dir: str
-    sidecar_meta_path: Optional[str]
+    sidecar_meta_path: str | None
 
 
 @dataclass(frozen=True)
@@ -124,14 +126,14 @@ class WriteResult:
 
     status: Literal["ok", "skip_existing", "dry_run"]
     out_md_path: str
-    assets_dir: Optional[str]
+    assets_dir: str | None
     assets_written: int
-    bytes_written_md: Optional[int]
-    bytes_written_assets: Optional[int]
+    bytes_written_md: int | None
+    bytes_written_assets: int | None
     sidecar_written: bool
-    renamed_assets: List[Dict[str, str]]
-    warnings: List[str]
-    error: Optional[Dict[str, str]]
+    renamed_assets: list[dict[str, str]]
+    warnings: list[str]
+    error: dict[str, str] | None
 
 
 # -----------------
@@ -146,10 +148,14 @@ class MarkdownSerializerPort:
     for a reference implementation.
     """
 
-    def write(self, doc: Any, ctx: WriterContext) -> WriteResult:  # pragma: no cover - interface only
+    def write(
+        self, doc: Any, ctx: WriterContext
+    ) -> WriteResult:  # pragma: no cover - interface only
         raise NotImplementedError
 
-    def compute_paths(self, doc: Any, ctx: WriterContext) -> TargetPaths:  # pragma: no cover - interface only
+    def compute_paths(
+        self, doc: Any, ctx: WriterContext
+    ) -> TargetPaths:  # pragma: no cover - interface only
         raise NotImplementedError
 
 
@@ -174,7 +180,10 @@ class MarkdownWriter(MarkdownSerializerPort):
 
     # Windows reserved basenames (case-insensitive)
     _WIN_RESERVED = {
-        "CON", "PRN", "AUX", "NUL",
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
         *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }
@@ -184,8 +193,8 @@ class MarkdownWriter(MarkdownSerializerPort):
         src_path = _get_doc_path(doc)
         meta = _get_doc_meta(doc)
         targets = self.compute_paths(doc, ctx)
-        warnings: List[str] = []
-        renamed: List[Dict[str, str]] = []
+        warnings: list[str] = []
+        renamed: list[dict[str, str]] = []
 
         out_md = Path(targets.out_md_path)
         assets_dir = Path(targets.assets_dir)
@@ -409,7 +418,7 @@ def _sanitize_filename(name: str, *, max_len: int = 128) -> str:
     # Remove path separators and control characters
     name = re.sub(r"[\\/\x00-\x1F]", "_", name)
     # Strip unsafe characters on Windows and common shells
-    name = re.sub(r"[<>:""|?*]", "_", name)
+    name = re.sub(r"[<>:" "|?*]", "_", name)
     # Collapse whitespace
     name = re.sub(r"\s+", " ", name).strip()
     # Prevent trailing dots/spaces (Windows)
@@ -515,7 +524,7 @@ def _fsync_dir(dir_path: Path) -> None:
         pass
 
 
-def _resolve_conflict(dest: Path, folder: Path, renamed: List[Dict[str, str]]) -> Path:
+def _resolve_conflict(dest: Path, folder: Path, renamed: list[dict[str, str]]) -> Path:
     if not dest.exists():
         return dest
     stem = dest.stem
@@ -567,8 +576,12 @@ def _build_sidecar_payload(doc: Any, ctx: WriterContext) -> Mapping[str, Any]:
     payload = {
         "source": {"relative_to_src_root": src_rel},
         "counts": {
-            "assets_to_copy": len(meta.get("assets_to_copy", [])) if isinstance(meta, Mapping) else 0,
-            "assets_to_write": len(meta.get("assets_to_write", [])) if isinstance(meta, Mapping) else 0,
+            "assets_to_copy": (
+                len(meta.get("assets_to_copy", [])) if isinstance(meta, Mapping) else 0
+            ),
+            "assets_to_write": (
+                len(meta.get("assets_to_write", [])) if isinstance(meta, Mapping) else 0
+            ),
         },
         "normalization": normalization,
         "redacted": True if meta.get("secrets", None) else False,

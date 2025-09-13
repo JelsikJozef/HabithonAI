@@ -50,4 +50,3 @@ exclude = ["tests*", "packages*"]
 
 [tool.setuptools.package-data]
 "anonymization" = ["py.typed"]
-

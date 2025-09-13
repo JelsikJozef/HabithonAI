@@ -1,6 +1,6 @@
-from typing import List, Optional
 from uuid import uuid4
-from ..domain.entities import DetectionResult, TokenMapping, PseudonymizationResult
+
+from ..domain.entities import PseudonymizationResult, TokenMapping
 from ..domain.ports import DetectorPort, TokenVaultPort
 from .detect import detect_all
 
@@ -21,10 +21,10 @@ def _map_token_type(entity_type: str) -> str:
 
 def pseudonymize(
     text: str,
-    detectors: List[DetectorPort],
+    detectors: list[DetectorPort],
     vault: TokenVaultPort,
     context_id: str,
-    language: Optional[str] = None,
+    language: str | None = None,
 ) -> PseudonymizationResult:
     """Replace detected PII with stable tokens and persist mappings.
 
@@ -42,13 +42,13 @@ def pseudonymize(
     entities = detection.entities
 
     # Build pseudonymized text by replacing spans left-to-right
-    out_parts: List[str] = []
-    mappings: List[TokenMapping] = []
+    out_parts: list[str] = []
+    mappings: list[TokenMapping] = []
     cursor = 0
     counters = {}
 
     for ent in entities:
-        out_parts.append(text[cursor:ent.start])
+        out_parts.append(text[cursor : ent.start])
         token_type = _map_token_type(ent.type)
         counters[token_type] = counters.get(token_type, 0) + 1
         token = _make_token(token_type, counters[token_type])

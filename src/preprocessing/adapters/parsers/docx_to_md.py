@@ -29,9 +29,10 @@ are specified in detail to guide a faithful, testable implementation.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any
 
 # Public constants for registry wiring
 EXTENSIONS: tuple[str, ...] = ("docx",)
@@ -108,7 +109,7 @@ class DocxToMd:
     def __init__(self, *, export_images: bool = True, assets_subdir: str = "assets") -> None:
         self._export_images = bool(export_images)
         self._assets_subdir = str(assets_subdir)
-        self.supported_features: Dict[str, bool] = {
+        self.supported_features: dict[str, bool] = {
             "tables": True,
             "images": True,
             "footnotes": True,
@@ -233,10 +234,11 @@ class DocxToMd:
 
         # Very naive hyperlink count (best-effort)
         import re as _re
+
         links += len(_re.findall(r"https?://\\S+", "\n".join(parts)))
 
         md = "\n\n".join(parts).replace("\r\n", "\n").replace("\r", "\n")
-        meta: Dict[str, Any] = {
+        meta: dict[str, Any] = {
             "headings": headings,
             "paragraphs": paragraphs,
             "links_count": links,
@@ -247,11 +249,13 @@ class DocxToMd:
         }
         doc_id = p.stem
         if MarkdownDoc is not None:
-            return MarkdownDoc(doc_id=doc_id, path=str(p), variant=None, lang=None, text_md=md, meta=meta)
+            return MarkdownDoc(
+                doc_id=doc_id, path=str(p), variant=None, lang=None, text_md=md, meta=meta
+            )
         # Fallback simple object
         return type("_Doc", (), {"text_md": md, "meta": meta})()
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         """Return a static capability description for audit/telemetry.
 
         Returns:

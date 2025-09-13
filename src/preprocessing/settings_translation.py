@@ -31,14 +31,14 @@ Validation helper:
 Note: This file avoids heavy imports and does not perform any model loading.
 """
 
-from types import MappingProxyType
 import os
-from datetime import datetime, timezone
-
+from datetime import UTC, datetime
+from types import MappingProxyType
 
 # ---------------------------
 # Small utilities (import-light)
 # ---------------------------
+
 
 def _env(key, default=None):
     v = os.environ.get(key)
@@ -150,24 +150,22 @@ _translation = {
     "engine": _ENGINE,
     "tgt_lang": "en",
     "strict": True,
-
     # 2) Model locations (offline only)
     "ct2_nllb": {
         "model_dir": _DEFAULT_CT2_MODEL_DIR,
         "compute_type": _CT2_COMPUTE_TYPE,  # "int8"|"int16"|"float32"
-        "device": _CT2_DEVICE,              # "cpu"|"cuda"
+        "device": _CT2_DEVICE,  # "cpu"|"cuda"
         "num_threads": _CT2_THREADS,
         "src_lang_map": _NLLB_LANG_MAP,
         "tgt_lang_code": "eng_Latn",
     },
     "marian": {
-        "models": _MARIAN_MODELS,          # ISO-like -> model id/path
+        "models": _MARIAN_MODELS,  # ISO-like -> model id/path
         "device": _MARIAN_DEVICE,
-        "dtype": _MARIAN_DTYPE,            # "auto" or explicit
+        "dtype": _MARIAN_DTYPE,  # "auto" or explicit
         "local_files_only": True,
         "hf_cache_dir": _MARIAN_CACHE_DIR,
     },
-
     # 3) Decoding & determinism
     "decoding": {
         "ct2": {
@@ -186,7 +184,6 @@ _translation = {
             "seed": 42,
         },
     },
-
     # 4) Segmenter options (Markdown)
     "segmenter": {
         "segment_max_chars": 1200,
@@ -197,7 +194,6 @@ _translation = {
         "collapse_softbreaks": True,
         "language_hint": None,
     },
-
     # 5) Language detection (routing)
     "langid": {
         "impl": "fasttext",
@@ -206,27 +202,24 @@ _translation = {
         "min_chars": 50,
         "candidates": ["sk", "de", "cs", "pl", "hu", "en"],
     },
-
     # 6) Glossary integration (optional)
     "glossary": {
         "enabled": False,
-        "mode": "none",               # "pre"|"post"|"both"|"none"
+        "mode": "none",  # "pre"|"post"|"both"|"none"
         "glossary_id": None,
         "db_path": "resources/glossary/glossary.sqlite",
         "regex_enabled": False,
     },
-
     # 7) Cache integration (optional)
     "cache": {
         "enabled": True,
-        "backend": "sqlite",          # "sqlite"|"fs"
+        "backend": "sqlite",  # "sqlite"|"fs"
         "root_path": _DEFAULT_MT_CACHE_PATH,
         "max_value_bytes": 1000000,
         "max_items": None,
         "default_ttl_seconds": None,
         "namespace": "ct2-nllb@eng_Latn",
     },
-
     # 8) Writer & I/O policy (as used by the app)
     "io": {
         "overwrite": _IO_OVERWRITE,
@@ -234,7 +227,6 @@ _translation = {
         "workers": _IO_WORKERS,
         "on_error": "skip",  # "skip"|"fail_fast"
     },
-
     # 9) Safety & policy flags
     "policy": {
         "network_access": False,
@@ -242,22 +234,20 @@ _translation = {
         "preserve_structure": True,
         "collect_telemetry": False,  # no content-level telemetry
     },
-
     # 10) Logging & telemetry (lightweight)
     "logging": {
-        "level": _LOG_LEVEL,        # "INFO"|"DEBUG"|"WARN"
-        "progress": "auto",         # "auto"|"plain"|"none"
+        "level": _LOG_LEVEL,  # "INFO"|"DEBUG"|"WARN"
+        "progress": "auto",  # "auto"|"plain"|"none"
         "redact_paths": True,
     },
     "telemetry": {
-        "enabled": True,            # attach per-phase timings & counts
-        "engine_fingerprint": True, # include model dir/hash in metadata
+        "enabled": True,  # attach per-phase timings & counts
+        "engine_fingerprint": True,  # include model dir/hash in metadata
     },
-
     # 11) Schema/versioning
     "schema": {
         "version": 1,
-        "last_updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "last_updated": datetime.now(UTC).isoformat(timespec="seconds"),
     },
 }
 
@@ -274,6 +264,7 @@ __all__ = [
 # ---------------------------
 # Validation helper
 # ---------------------------
+
 
 def _path_exists(p):
     try:
@@ -311,17 +302,17 @@ def validate_translation_settings(cfg=None):
     # Paths
     langid_model = cfg["langid"]["model_path"]
     if not _path_exists(langid_model):
-        issues.append("LangID model not found: {0}".format(langid_model))
+        issues.append(f"LangID model not found: {langid_model}")
 
     cache_root = cfg["cache"]["root_path"]
     cache_parent = os.path.dirname(cache_root) if _is_file_like(cache_root) else cache_root
     if not _path_exists(cache_parent):
-        issues.append("Cache parent path does not exist: {0}".format(cache_parent))
+        issues.append(f"Cache parent path does not exist: {cache_parent}")
 
     if bool(cfg["glossary"]["enabled"]):
         gl_path = cfg["glossary"]["db_path"]
         if not _path_exists(gl_path):
-            issues.append("Glossary DB not found but glossary.enabled=True: {0}".format(gl_path))
+            issues.append(f"Glossary DB not found but glossary.enabled=True: {gl_path}")
 
     engine = str(cfg["engine"]).strip()
     strict = bool(cfg.get("strict", False))
@@ -331,11 +322,11 @@ def validate_translation_settings(cfg=None):
         ct2 = cfg["ct2_nllb"]
         model_dir = ct2["model_dir"]
         if not _path_exists(model_dir):
-            issues.append("CT2/NLLB model_dir not found: {0}".format(model_dir))
+            issues.append(f"CT2/NLLB model_dir not found: {model_dir}")
         if ct2["device"] not in {"cpu", "cuda"}:
-            issues.append("CT2 device invalid: {0}".format(ct2['device']))
+            issues.append("CT2 device invalid: {0}".format(ct2["device"]))
         if ct2["compute_type"] not in {"int8", "int16", "float32"}:
-            issues.append("CT2 compute_type unusual: {0}".format(ct2['compute_type']))
+            issues.append("CT2 compute_type unusual: {0}".format(ct2["compute_type"]))
         if int(ct2["num_threads"]) < 1:
             issues.append("CT2 num_threads must be >= 1")
         # Language coverage
@@ -345,7 +336,7 @@ def validate_translation_settings(cfg=None):
             if lang == "en":
                 continue
             if lang not in src_map:
-                issues.append("CT2 src_lang_map missing language: '{0}'".format(lang))
+                issues.append(f"CT2 src_lang_map missing language: '{lang}'")
         # Decoding/determinism
         dec = cfg["decoding"]["ct2"]
         if int(dec["beam_size"]) < 1:
@@ -362,7 +353,9 @@ def validate_translation_settings(cfg=None):
         if not models:
             issues.append("Marian engine selected but no models configured")
         if mar["device"] != "cpu":
-            issues.append("Marian device should be 'cpu' for offline policy (got {0})".format(mar['device']))
+            issues.append(
+                "Marian device should be 'cpu' for offline policy (got {0})".format(mar["device"])
+            )
         if not bool(mar.get("local_files_only", True)):
             issues.append("Marian local_files_only should be True for offline policy")
         # Language coverage
@@ -371,7 +364,7 @@ def validate_translation_settings(cfg=None):
             if lang == "en":
                 continue
             if lang not in models:
-                issues.append("Marian models missing language: '{0}'".format(lang))
+                issues.append(f"Marian models missing language: '{lang}'")
         # Decoding/determinism
         dec = cfg["decoding"]["marian"]
         if int(dec["num_beams"]) < 1:
@@ -383,7 +376,7 @@ def validate_translation_settings(cfg=None):
         if int(dec["max_new_tokens"]) < 1:
             issues.append("Marian max_new_tokens must be >= 1")
     else:
-        issues.append("Unknown engine: {0}".format(engine))
+        issues.append(f"Unknown engine: {engine}")
 
     # Policy constraints
     if bool(cfg["policy"]["network_access"]):
@@ -412,18 +405,18 @@ def capabilities_summary(cfg=None):
         device = ct2["device"]
         compute = ct2["compute_type"]
         threads = ct2["num_threads"]
-        engine_part = "engine=ct2_nllb device={0} compute={1} threads={2}".format(device, compute, threads)
+        engine_part = f"engine=ct2_nllb device={device} compute={compute} threads={threads}"
     elif engine == "marian_opus":
         mar = cfg["marian"]
         device = mar["device"]
         dtype = mar["dtype"]
-        engine_part = "engine=marian_opus device={0} dtype={1}".format(device, dtype)
+        engine_part = f"engine=marian_opus device={device} dtype={dtype}"
     else:
-        engine_part = "engine={0}".format(engine)
+        engine_part = f"engine={engine}"
 
     cache = cfg["cache"]
     cache_part = "cache=on(" + str(cache["backend"]) + ")" if cache.get("enabled") else "cache=off"
     glossary = cfg["glossary"]
     gl_part = "glossary=on" if glossary.get("enabled") else "glossary=off"
 
-    return "{0} {1} {2}".format(engine_part, cache_part, gl_part)
+    return f"{engine_part} {cache_part} {gl_part}"

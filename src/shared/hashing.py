@@ -17,16 +17,15 @@ Notes
 - Do not treat a hash as encryption; use HMAC with a secret if inputs must be concealed.
 - Prefer content-derived hashes for deduplication across directories/machines.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
-from typing import Iterable, Optional, Union, Literal
 import hashlib
 import hmac
-import os
 import unicodedata
+from datetime import datetime
+from pathlib import Path
+from typing import Literal
 
 __all__ = [
     "normalize_text",
@@ -87,7 +86,7 @@ def normalize_text(
     return out
 
 
-def _new_hasher(algo: Literal["sha256", "sha1"]) -> "hashlib._Hash":
+def _new_hasher(algo: Literal["sha256", "sha1"]) -> hashlib._Hash:
     if algo == "sha256":
         return hashlib.sha256()
     if algo == "sha1":
@@ -115,7 +114,7 @@ def content_hash(
     return h.hexdigest()
 
 
-def _canon_path(path: Union[str, Path], base: Optional[Union[str, Path]] = None) -> str:
+def _canon_path(path: str | Path, base: str | Path | None = None) -> str:
     p = Path(path)
     if base is not None:
         try:
@@ -127,11 +126,11 @@ def _canon_path(path: Union[str, Path], base: Optional[Union[str, Path]] = None)
 
 
 def document_fingerprint(
-    path: Union[str, Path],
+    path: str | Path,
     size_bytes: int,
-    mtime: Union[float, int, datetime],
+    mtime: float | int | datetime,
     *,
-    base: Optional[Union[str, Path]] = None,
+    base: str | Path | None = None,
     algo: Literal["sha1", "sha256"] = "sha1",
 ) -> str:
     """
@@ -166,7 +165,7 @@ def document_fingerprint(
 def make_document_id(
     canonical_text: str,
     *,
-    salt: Optional[str] = None,
+    salt: str | None = None,
     length: int = 16,
     prefix: str = "doc",
     algo: Literal["sha1", "sha256"] = "sha1",
@@ -198,9 +197,9 @@ def make_document_id(
 def chunk_hash(
     chunk_text: str,
     *,
-    doc_id: Optional[str] = None,
-    index: Optional[int] = None,
-    variant: Optional[str] = None,
+    doc_id: str | None = None,
+    index: int | None = None,
+    variant: str | None = None,
     algo: Literal["sha256", "sha1"] = "sha256",
 ) -> str:
     """
@@ -256,4 +255,3 @@ def chunk_id(
     idx = max(0, int(index))
     fmt = f"{{:0{int(width)}d}}"
     return f"{prefix}-{doc_id}-{variant}-{fmt.format(idx)}"
-

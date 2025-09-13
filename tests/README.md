@@ -27,4 +27,3 @@ Commands
 Notes
 - CT2/NLLB and Marian adapters are tested only along offline code paths that don’t require the heavy libraries (e.g., “no segments” or cache hits). Real model inference is intentionally excluded.
 - Detected outputs normalized to LF and UTF-8.
-

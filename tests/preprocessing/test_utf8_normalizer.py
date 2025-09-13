@@ -1,12 +1,13 @@
 import types
+
 import pytest
 
 from src.preprocessing.adapters.encoding.utf8_normalizer import (
-    NormalizerOptions,
-    normalize_text,
-    normalize_doc,
     NormalizationError,
+    NormalizerOptions,
     descriptor,
+    normalize_doc,
+    normalize_text,
 )
 
 
@@ -20,9 +21,9 @@ def test_eol_mixed_to_lf_and_report():
 
 
 def test_nbsp_space_and_control_chars_removed():
-    text = "Hello\u00A0World\x01!\n"
+    text = "Hello\u00a0World\x01!\n"
     out, report = normalize_text(text, NormalizerOptions())
-    assert "\u00A0" not in out
+    assert "\u00a0" not in out
     assert "Hello World!\n" == out
     assert report["control_chars_removed"] >= 1
 
@@ -33,7 +34,7 @@ def test_protect_code_fences_and_inline_and_tables():
         "Before\tline\n"
         "```py\nprint(\t'code')  \n```\n"
         "| a | b |\n| --- | --- |\ncell1 | cell2  \n"
-        "Inline: `code\tspan` and NBSP\u00A0here\n"
+        "Inline: `code\tspan` and NBSP\u00a0here\n"
     )
     opts = NormalizerOptions()
     out, report = normalize_text(text, opts)
@@ -78,7 +79,7 @@ def test_unicode_nfkc_normalization():
 
 
 def test_idempotency():
-    text = "A\tB\u00A0C\r\n\n"
+    text = "A\tB\u00a0C\r\n\n"
     opts = NormalizerOptions()
     out1, report1 = normalize_text(text, opts)
     out2, report2 = normalize_text(out1, opts)

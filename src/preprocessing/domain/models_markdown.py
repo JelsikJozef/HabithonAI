@@ -19,11 +19,13 @@ and on the validation utility to enforce invariants at the domain boundary. This
 module does not raise adapter/vendor exceptions; callers should map failures to
 `preprocessing.domain.errors.NormalizationError` or other domain errors upstream.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from typing import Any, Dict, Literal, Mapping, MutableMapping, Optional
 import json
+from collections.abc import Mapping, MutableMapping
+from dataclasses import dataclass, field, replace
+from typing import Any, Literal
 
 __all__ = [
     "LanguageCode",
@@ -47,14 +49,14 @@ Examples:
     - "de-AT"
 """
 
-NormalizationReport = Dict[str, Any]
+NormalizationReport = dict[str, Any]
 """Normalization report attached under ``meta["normalization"]``.
 
 The concrete shape is defined by the encoding/normalization adapter. The value
 must be JSON-serializable.
 """
 
-MarkdownStats = Dict[str, int]
+MarkdownStats = dict[str, int]
 """Optional counters summarizing Markdown structure.
 
 Possible keys include ``headings``, ``tables``, ``images``, and ``links``. The
@@ -100,13 +102,13 @@ class MarkdownDoc:
 
     doc_id: str
     path: str
-    variant: Optional[Literal["original", "english"]]
-    lang: Optional[LanguageCode]
+    variant: Literal["original", "english"] | None
+    lang: LanguageCode | None
     text_md: str
     encoding: Literal["utf-8"] = "utf-8"
-    meta: Dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, Any] = field(default_factory=dict)
 
-    def copy_with(self, **changes: Any) -> "MarkdownDoc":
+    def copy_with(self, **changes: Any) -> MarkdownDoc:
         """Return a new instance with selected fields replaced.
 
         Args:
@@ -122,7 +124,7 @@ class MarkdownDoc:
 
         return replace(self, **changes)
 
-    def to_dict(self, *, redacted: bool = False) -> Dict[str, Any]:
+    def to_dict(self, *, redacted: bool = False) -> dict[str, Any]:
         """Serialize the document to a deterministic plain ``dict``.
 
         Args:
@@ -242,7 +244,7 @@ def validate_markdown_doc(doc: MarkdownDoc) -> None:
 # -----------------------------
 
 
-def _redact_meta(meta: Mapping[str, Any] | MutableMapping[str, Any]) -> Dict[str, Any]:
+def _redact_meta(meta: Mapping[str, Any] | MutableMapping[str, Any]) -> dict[str, Any]:
     """Return a shallowly redacted copy of ``meta``.
 
     Args:
@@ -266,11 +268,10 @@ def _redact_meta(meta: Mapping[str, Any] | MutableMapping[str, Any]) -> Dict[str
         "secret",
         "id_number",
     }
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for k, v in dict(meta).items():
         if isinstance(k, str) and k.lower() in sensitive_keys:
             out[k] = "[redacted]"
         else:
             out[k] = v
     return out
-

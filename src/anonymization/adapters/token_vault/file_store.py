@@ -1,15 +1,18 @@
 import json
 import os
-from typing import Iterable, List
+from collections.abc import Iterable
+
 from ...domain.entities import TokenMapping
-from ...domain.ports import TokenVaultPort
 from ...domain.errors import TokenVaultError
+from ...domain.ports import TokenVaultPort
 
 
 class FileTokenVault(TokenVaultPort):
     """Stores token mappings per context_id in JSON files under a base directory."""
 
-    def __init__(self, base_dir: str = "src/anonymization/adapters/token_vault/.anonymization_vault") -> None:
+    def __init__(
+        self, base_dir: str = "src/anonymization/adapters/token_vault/.anonymization_vault"
+    ) -> None:
         self.base_dir = base_dir
         os.makedirs(self.base_dir, exist_ok=True)
 
@@ -21,9 +24,9 @@ class FileTokenVault(TokenVaultPort):
         path = self._ctx_path(context_id)
         try:
             # Merge with existing mappings, de-duplicating by token
-            existing: List[TokenMapping] = []
+            existing: list[TokenMapping] = []
             if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     data = json.load(f)
                     existing = [TokenMapping(**d) for d in data]
             by_token = {m.token: m for m in existing}
@@ -35,12 +38,12 @@ class FileTokenVault(TokenVaultPort):
         except Exception as e:
             raise TokenVaultError(f"Failed to save mappings for {context_id}: {e}")
 
-    def get_mappings(self, context_id: str) -> List[TokenMapping]:
+    def get_mappings(self, context_id: str) -> list[TokenMapping]:
         path = self._ctx_path(context_id)
         if not os.path.exists(path):
             return []
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             return [TokenMapping(**d) for d in data]
         except Exception as e:

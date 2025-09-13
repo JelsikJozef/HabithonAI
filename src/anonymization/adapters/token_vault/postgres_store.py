@@ -21,21 +21,23 @@ Notes:
 - Lazy import of psycopg to keep module importable without the driver.
 - Treats tenant_id as part of identity; None maps to empty string.
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Optional, Callable, Any
+from typing import Any
 
 
-def _norm_tenant(tenant_id: Optional[str]) -> str:
+def _norm_tenant(tenant_id: str | None) -> str:
     return tenant_id or ""
 
 
 @dataclass
 class PostgresTokenVault:
-    dsn: Optional[str] = None
+    dsn: str | None = None
     table: str = "pii_tokens"
-    conn_factory: Optional[Callable[[], Any]] = None  # returns a DB-API connection
+    conn_factory: Callable[[], Any] | None = None  # returns a DB-API connection
 
     def _get_conn(self):
         if self.conn_factory is not None:
@@ -72,10 +74,10 @@ class PostgresTokenVault:
                 pass
 
     # Optional namespace accessor
-    def get_token(self, tenant_id: Optional[str] = None) -> str:
+    def get_token(self, tenant_id: str | None = None) -> str:
         return _norm_tenant(tenant_id)
 
-    def upsert(self, token_id: str, tenant_id: Optional[str], pii_type: str, value: str) -> None:
+    def upsert(self, token_id: str, tenant_id: str | None, pii_type: str, value: str) -> None:
         sql = f"""
         INSERT INTO {self.table} (tenant_id, token_id, pii_type, value_enc, first_seen)
         VALUES (%s, %s, %s, %s, NOW())
@@ -85,14 +87,16 @@ class PostgresTokenVault:
         try:
             with conn:
                 with conn.cursor() as cur:
-                    cur.execute(sql, (_norm_tenant(tenant_id), token_id, pii_type, value.encode("utf-8")))
+                    cur.execute(
+                        sql, (_norm_tenant(tenant_id), token_id, pii_type, value.encode("utf-8"))
+                    )
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
 
-    def lookup(self, token_id: str, tenant_id: Optional[str]) -> Optional[str]:
+    def lookup(self, token_id: str, tenant_id: str | None) -> str | None:
         sql = f"""
         SELECT value_enc FROM {self.table}
         WHERE tenant_id = %s AND token_id = %s
@@ -114,4 +118,3 @@ class PostgresTokenVault:
                 conn.close()
             except Exception:
                 pass
-

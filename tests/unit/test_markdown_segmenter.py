@@ -27,11 +27,7 @@ def test_code_fences_and_inline_code_untouched():
     assert out == md
 
 
-ess_table = (
-    "| a | b |\n"
-    "| --- | :---: |\n"
-    "| c1 | c2 |\n"
-)
+ess_table = "| a | b |\n" "| --- | :---: |\n" "| c1 | c2 |\n"
 
 
 def test_tables_cells_translated_but_layout_intact():

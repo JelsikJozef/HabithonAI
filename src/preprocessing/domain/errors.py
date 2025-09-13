@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 __all__ = [
     "DomainError",
@@ -46,20 +46,20 @@ class DomainError(Exception):
         - ``to_dict()`` omits ``details`` when it is ``None``.
     """
 
-    def __init__(self, code: str, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
         self.details = details
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a deterministic dictionary representation of the error.
 
         Returns:
             dict: ``{"code": code, "message": message, "details": details}`` with
             ``details`` omitted when ``None``.
         """
-        out: Dict[str, Any] = {"code": self.code, "message": self.message}
+        out: dict[str, Any] = {"code": self.code, "message": self.message}
         if self.details is not None:
             out["details"] = self.details
         return out
@@ -87,7 +87,7 @@ class SettingsError(DomainError):
     Suggested HTTP mapping (informational): 400 Bad Request.
     """
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("settings_error", message, details)
 
 
@@ -99,7 +99,7 @@ class FactoryError(DomainError):
     Suggested HTTP mapping (informational): 500 Internal Server Error.
     """
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("factory_error", message, details)
 
 
@@ -117,7 +117,7 @@ class UnsupportedFormatError(DomainError):
     Suggested HTTP mapping: 422 Unprocessable Entity.
     """
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("unsupported_format", message, details)
 
 
@@ -127,28 +127,28 @@ class ParserDependencyMissingError(DomainError):
     Example remediation: "Install tesseract and 'eng' language pack".
     """
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("parser_dependency_missing", message, details)
 
 
 class CorruptedFileError(DomainError):
     """Input file is unreadable or structurally broken (e.g., truncated ZIP)."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("corrupted_file", message, details)
 
 
 class PasswordProtectedFileError(DomainError):
     """Encrypted file requires a password to open (e.g., PDF/DOCX)."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("password_protected", message, details)
 
 
 class ParseWarningAsError(DomainError):
     """Raised in strict modes where a lossy conversion would have occurred."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("parse_warning_as_error", message, details)
 
 
@@ -160,7 +160,7 @@ class ParseWarningAsError(DomainError):
 class NormalizationError(DomainError):
     """Normalization failure (invalid options, size limit exceeded, fence errors)."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("normalization_error", message, details)
 
 
@@ -177,7 +177,7 @@ class WriteError(DomainError):
     Suggested HTTP mapping: 500 Internal Server Error.
     """
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("write_error", message, details)
 
 
@@ -189,49 +189,49 @@ class WriteError(DomainError):
 class OcrError(DomainError):
     """OCR engine/packs missing or recognition failure."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("ocr_error", message, details)
 
 
 class TranslationError(DomainError):
     """Translation model unavailable or unsupported language pair."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("translation_error", message, details)
 
 
 class AnonymizationError(DomainError):
     """Detection or pseudonymization failure."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("anonymization_error", message, details)
 
 
 class TokenVaultError(DomainError):
     """De-/re-identification map access errors (e.g., missing key, storage failure)."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("token_vault_error", message, details)
 
 
 class EnrichmentError(DomainError):
     """Non-JSON or schema-invalid LLM output in enrichment stage."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("enrichment_error", message, details)
 
 
 class VectorBuildError(DomainError):
     """Chunking/embedding assembly problems (empty text, dimension mismatch)."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("vector_build_error", message, details)
 
 
 class VectorDBError(DomainError):
     """Upsert/query/collection errors (network unavailable or schema mismatch)."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__("vector_db_error", message, details)
 
 
@@ -247,7 +247,9 @@ class NotConfigured(DomainError):
     capability is not configured.
     """
 
-    def __init__(self, message: str = "feature not configured", details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self, message: str = "feature not configured", details: dict[str, Any] | None = None
+    ) -> None:
         super().__init__("not_configured", message, details)
 
 
@@ -264,7 +266,9 @@ class PreprocessingError(DomainError):
         (``from ...domain.errors import PreprocessingError``).
     """
 
-    def __init__(self, message: str = "preprocessing error", details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self, message: str = "preprocessing error", details: dict[str, Any] | None = None
+    ) -> None:
         super().__init__("preprocessing_error", message, details)
 
 
@@ -275,7 +279,9 @@ class ParserNotFoundError(UnsupportedFormatError):
         Prefer :class:`UnsupportedFormatError` in new code.
     """
 
-    def __init__(self, message: str = "parser not found", details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self, message: str = "parser not found", details: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(message, {**(details or {}), "deprecated": True})
 
 
@@ -286,5 +292,7 @@ class SerializationError(WriteError):
         Prefer :class:`WriteError` in new code for all writer/sidecar issues.
     """
 
-    def __init__(self, message: str = "serialization error", details: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self, message: str = "serialization error", details: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(message, {**(details or {}), "deprecated": True})

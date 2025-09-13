@@ -51,8 +51,8 @@ Registry note
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
 from pathlib import Path
+from typing import Any
 
 # Public constants for registry wiring
 EXTENSIONS: tuple[str, ...] = ("pdf",)
@@ -82,7 +82,7 @@ class AssetsExportPlan:
     """
 
     assets_dir: str
-    filename_map: Dict[str, str]
+    filename_map: dict[str, str]
 
 
 class PdfToMd:
@@ -153,14 +153,14 @@ class PdfToMd:
     def __init__(
         self,
         *,
-        page_range: Optional[str] = None,
+        page_range: str | None = None,
         remove_headers_footers: bool = True,
         page_divider: str = "\n\n---\n\n",
         export_images: bool = False,
         assets_subdir: str = "assets",
         table_detection: str = "auto",
         ocr_enabled: bool = True,
-        ocr_langs: Optional[tuple[str, ...]] = None,
+        ocr_langs: tuple[str, ...] | None = None,
         ocr_fail_on_low_confidence: bool = False,
         ocr_confidence_threshold: float = 0.55,
         strict_mode: bool = False,
@@ -176,7 +176,7 @@ class PdfToMd:
         self._ocr_fail_on_low_confidence = bool(ocr_fail_on_low_confidence)
         self._ocr_conf_threshold = float(ocr_confidence_threshold)
         self._strict_mode = bool(strict_mode)
-        self.supported_features: Dict[str, bool] = {
+        self.supported_features: dict[str, bool] = {
             "multi_column_reading_order": True,
             "dehyphenation": True,
             "headers_footers_removal": True,
@@ -292,7 +292,7 @@ class PdfToMd:
         text = extract_text(str(p)) or ""
         # Normalize newlines
         md = str(text).replace("\r\n", "\n").replace("\r", "\n")
-        meta: Dict[str, Any] = {
+        meta: dict[str, Any] = {
             "pages_processed": None,
             "tables_detected": 0,
             "images_exported": 0,
@@ -301,10 +301,12 @@ class PdfToMd:
         }
         doc_id = p.stem
         if MarkdownDoc is not None:
-            return MarkdownDoc(doc_id=doc_id, path=str(p), variant=None, lang=None, text_md=md, meta=meta)
+            return MarkdownDoc(
+                doc_id=doc_id, path=str(p), variant=None, lang=None, text_md=md, meta=meta
+            )
         return type("_Doc", (), {"text_md": md, "meta": meta})()
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         """Return a static capability/configuration description for audit/telemetry.
 
         Returns:
@@ -329,4 +331,3 @@ class PdfToMd:
                 "strict_mode": self._strict_mode,
             },
         }
-

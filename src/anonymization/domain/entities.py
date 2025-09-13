@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import List, Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -13,18 +12,19 @@ class PiiEntity:
     - score: optional confidence score in [0,1]
     - detector: which detector produced this entity
     """
+
     type: str
     start: int
     end: int
     value: str
-    score: Optional[float] = None
-    detector: Optional[str] = None
+    score: float | None = None
+    detector: str | None = None
 
 
 @dataclass
 class DetectionResult:
     text: str
-    entities: List[PiiEntity]
+    entities: list[PiiEntity]
 
 
 @dataclass(frozen=True)
@@ -38,14 +38,14 @@ class TokenMapping:
 class PseudonymizationResult:
     original_text: str
     pseudonymized_text: str
-    mappings: List[TokenMapping]
+    mappings: list[TokenMapping]
 
 
 @dataclass
 class DeAnonymizationResult:
     anonymized_text: str
     restored_text: str
-    mappings_used: List[TokenMapping]
+    mappings_used: list[TokenMapping]
 
 
 def spans_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
@@ -66,7 +66,7 @@ def _type_priority(t: str) -> int:
     return 0
 
 
-def merge_overlapping_entities(entities: List[PiiEntity]) -> List[PiiEntity]:
+def merge_overlapping_entities(entities: list[PiiEntity]) -> list[PiiEntity]:
     """Return a list of non-overlapping entities.
 
     Overlap resolution prefers higher-priority types (e.g., PERSON over ORGANIZATION).
@@ -84,7 +84,7 @@ def merge_overlapping_entities(entities: List[PiiEntity]) -> List[PiiEntity]:
             -(e.score if e.score is not None else 0.0),
         ),
     )
-    kept: List[PiiEntity] = []
+    kept: list[PiiEntity] = []
     for ent in entities_sorted:
         replaced = False
         for i, k in enumerate(list(kept)):

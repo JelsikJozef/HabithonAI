@@ -16,4 +16,3 @@ class DeAnonymizationError(AnonymizationError):
 
 class TokenVaultError(AnonymizationError):
     pass
-

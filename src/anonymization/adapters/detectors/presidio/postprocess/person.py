@@ -1,4 +1,3 @@
-from typing import List, Optional
 from anonymization.domain.entities import PiiEntity
 
 # Simple salutation lexicons for trimming
@@ -37,7 +36,9 @@ def _strip_prefix_tokens(text: str, start: int, end: int, vocab: set[str]) -> in
     return i
 
 
-def trim_person_entities(entities: List[PiiEntity], text: str, language: Optional[str]) -> List[PiiEntity]:
+def trim_person_entities(
+    entities: list[PiiEntity], text: str, language: str | None
+) -> list[PiiEntity]:
     """Trim salutations/titles from PERSON spans based on language conventions.
 
     Parameters
@@ -48,7 +49,7 @@ def trim_person_entities(entities: List[PiiEntity], text: str, language: Optiona
     Returns
     - New list of PiiEntity where PERSON spans no longer include salutation/title prefixes.
     """
-    out: List[PiiEntity] = []
+    out: list[PiiEntity] = []
     for e in entities:
         if e.type != "PERSON":
             out.append(e)
@@ -61,7 +62,16 @@ def trim_person_entities(entities: List[PiiEntity], text: str, language: Optiona
         else:
             s2 = s
         if s2 != s and s2 < t:
-            out.append(PiiEntity(type=e.type, start=s2, end=t, value=text[s2:t], score=e.score, detector=e.detector))
+            out.append(
+                PiiEntity(
+                    type=e.type,
+                    start=s2,
+                    end=t,
+                    value=text[s2:t],
+                    score=e.score,
+                    detector=e.detector,
+                )
+            )
         else:
             out.append(e)
     return out

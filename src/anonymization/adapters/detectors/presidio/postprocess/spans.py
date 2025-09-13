@@ -1,8 +1,7 @@
-from typing import List
 from anonymization.domain.entities import PiiEntity
 
 
-def trim_whitespace(entities: List[PiiEntity], text: str) -> List[PiiEntity]:
+def trim_whitespace(entities: list[PiiEntity], text: str) -> list[PiiEntity]:
     """Trim leading/trailing whitespace from entity spans.
 
     Parameters
@@ -12,7 +11,7 @@ def trim_whitespace(entities: List[PiiEntity], text: str) -> List[PiiEntity]:
     Returns
     - New list of PiiEntity with whitespace-trimmed start/end and updated values.
     """
-    out: List[PiiEntity] = []
+    out: list[PiiEntity] = []
     for e in entities:
         s, e_end = e.start, e.end
         # left trim
@@ -24,5 +23,14 @@ def trim_whitespace(entities: List[PiiEntity], text: str) -> List[PiiEntity]:
         if s == e.start and e_end == e.end:
             out.append(e)
         else:
-            out.append(PiiEntity(type=e.type, start=s, end=e_end, value=text[s:e_end], score=e.score, detector=e.detector))
+            out.append(
+                PiiEntity(
+                    type=e.type,
+                    start=s,
+                    end=e_end,
+                    value=text[s:e_end],
+                    score=e.score,
+                    detector=e.detector,
+                )
+            )
     return out

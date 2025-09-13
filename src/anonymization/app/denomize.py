@@ -1,9 +1,10 @@
-from typing import List
 from ..domain.entities import DeAnonymizationResult, TokenMapping
 from ..domain.ports import TokenVaultPort
 
 
-def deanonymize(anonymized_text: str, vault: TokenVaultPort, context_id: str) -> DeAnonymizationResult:
+def deanonymize(
+    anonymized_text: str, vault: TokenVaultPort, context_id: str
+) -> DeAnonymizationResult:
     """Restore original text by replacing tokens using stored mappings.
 
     Parameters
@@ -14,7 +15,7 @@ def deanonymize(anonymized_text: str, vault: TokenVaultPort, context_id: str) ->
     Returns
     - DeAnonymizationResult with the anonymized input, fully restored text, and the mappings applied in the process.
     """
-    mappings: List[TokenMapping] = vault.get_mappings(context_id)
+    mappings: list[TokenMapping] = vault.get_mappings(context_id)
     restored = anonymized_text
     # Replace tokens with their original values; replace longest tokens first for safety
     for m in sorted(mappings, key=lambda x: len(x.token), reverse=True):

@@ -1,14 +1,13 @@
 import argparse
 import json
-import sys
-from typing import Optional
+
 from ..adapters.container import build_default
+from ..app.denomize import deanonymize
 from ..app.detect import detect_all
 from ..app.pseudonymize import pseudonymize
-from ..app.denomize import deanonymize
 
 
-def main(argv: Optional[list[str]] = None):
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Anonymization CLI")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -30,28 +29,44 @@ def main(argv: Optional[list[str]] = None):
 
     if args.cmd == "detect":
         res = detect_all(args.text, detectors, language=args.language)
-        print(json.dumps({
-            "text": res.text,
-            "entities": [e.__dict__ for e in res.entities]
-        }, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {"text": res.text, "entities": [e.__dict__ for e in res.entities]},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     elif args.cmd == "pseudonymize":
-        res = pseudonymize(args.text, detectors, vault, context_id=args.context, language=args.language)
-        print(json.dumps({
-            "original_text": res.original_text,
-            "pseudonymized_text": res.pseudonymized_text,
-            "mappings": [m.__dict__ for m in res.mappings]
-        }, ensure_ascii=False, indent=2))
+        res = pseudonymize(
+            args.text, detectors, vault, context_id=args.context, language=args.language
+        )
+        print(
+            json.dumps(
+                {
+                    "original_text": res.original_text,
+                    "pseudonymized_text": res.pseudonymized_text,
+                    "mappings": [m.__dict__ for m in res.mappings],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     elif args.cmd == "deanonymize":
         res = deanonymize(args.text, vault, context_id=args.context)
-        print(json.dumps({
-            "anonymized_text": res.anonymized_text,
-            "restored_text": res.restored_text,
-            "mappings_used": [m.__dict__ for m in res.mappings_used]
-        }, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "anonymized_text": res.anonymized_text,
+                    "restored_text": res.restored_text,
+                    "mappings_used": [m.__dict__ for m in res.mappings_used],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     else:
         parser.error("Unknown command")
 
 
 if __name__ == "__main__":
     main()
-

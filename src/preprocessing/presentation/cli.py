@@ -22,16 +22,18 @@ Capabilities note:
 import argparse
 import json
 import logging
-from dataclasses import dataclass
-from dataclasses import asdict as _dc_asdict, is_dataclass as _dc_is_dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import sys
 import time
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict as _dc_asdict
+from dataclasses import dataclass
+from dataclasses import is_dataclass as _dc_is_dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 # Default extension whitelist (case-insensitive; dot optional in user input)
-_DEFAULT_INCLUDE_EXT: Tuple[str, ...] = (".docx", ".xlsx", ".pdf", ".msg")
+_DEFAULT_INCLUDE_EXT: tuple[str, ...] = (".docx", ".xlsx", ".pdf", ".msg")
 
 
 @dataclass(frozen=True)
@@ -45,9 +47,9 @@ class EffectiveConfig:
     src: Path
     out: Path
     recurse: bool
-    include_ext: Tuple[str, ...]
-    exclude_glob: Tuple[str, ...]
-    max_files: Optional[int]
+    include_ext: tuple[str, ...]
+    exclude_glob: tuple[str, ...]
+    max_files: int | None
     overwrite: bool
     assets_subdir: str
     write_meta: str  # {"none","sidecar","inline"}
@@ -56,14 +58,14 @@ class EffectiveConfig:
     dry_run: bool
     log_level: str  # {ERROR,WARNING,INFO,DEBUG}
     progress: str  # {auto,plain,none}
-    report: Optional[Path]
+    report: Path | None
     strict: bool
     normalize_eol: str  # {lf,keep}
-    locale: Optional[str]
+    locale: str | None
     # New: optional log file path
-    log_file: Optional[Path]
+    log_file: Path | None
 
-    def as_app_config(self) -> Dict[str, Any]:
+    def as_app_config(self) -> dict[str, Any]:
         """Return a pure-data dict appropriate for the application layer.
 
         The returned mapping contains only JSON-serializable primitives, except for
@@ -104,6 +106,7 @@ class EffectiveConfig:
 
 # ----- Utilities -----
 
+
 def _normalize_ext(ext: str) -> str:
     s = ext.strip().lower()
     return s if s.startswith(".") else f".{s}" if s else s
@@ -118,7 +121,8 @@ def _is_tty() -> bool:
 
 # ----- Argument parsing -----
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments for the mdify CLI.
 
     Description:
@@ -177,7 +181,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
 
     req = parser.add_argument_group("Required")
-    req.add_argument("--src", required=True, help="Source directory to scan (must exist and be readable)")
+    req.add_argument(
+        "--src", required=True, help="Source directory to scan (must exist and be readable)"
+    )
     req.add_argument(
         "--out",
         required=True,
@@ -186,8 +192,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
     scan = parser.add_argument_group("Scanning & selection")
     recurse = scan.add_mutually_exclusive_group()
-    recurse.add_argument("--recurse", dest="recurse", action="store_true", help="Recurse into subdirectories")
-    recurse.add_argument("--no-recurse", dest="recurse", action="store_false", help="Do not recurse into subdirectories")
+    recurse.add_argument(
+        "--recurse", dest="recurse", action="store_true", help="Recurse into subdirectories"
+    )
+    recurse.add_argument(
+        "--no-recurse",
+        dest="recurse",
+        action="store_false",
+        help="Do not recurse into subdirectories",
+    )
     parser.set_defaults(recurse=True)
     scan.add_argument(
         "--include-ext",
@@ -203,14 +216,25 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=[],
         help="Glob patterns relative to --src to skip (e.g., **/tmp/** **/~$*)",
     )
-    scan.add_argument("--max-files", type=int, default=None, help="Hard cap on number of files to process")
+    scan.add_argument(
+        "--max-files", type=int, default=None, help="Hard cap on number of files to process"
+    )
 
     outg = parser.add_argument_group("Output & writing")
     ow = outg.add_mutually_exclusive_group()
-    ow.add_argument("--overwrite", dest="overwrite", action="store_true", help="Overwrite existing .md outputs")
-    ow.add_argument("--skip-existing", dest="overwrite", action="store_false", help="Skip when target .md exists")
+    ow.add_argument(
+        "--overwrite", dest="overwrite", action="store_true", help="Overwrite existing .md outputs"
+    )
+    ow.add_argument(
+        "--skip-existing",
+        dest="overwrite",
+        action="store_false",
+        help="Skip when target .md exists",
+    )
     parser.set_defaults(overwrite=False)
-    outg.add_argument("--assets-subdir", default="assets", help="Subfolder name for exported assets next to .md")
+    outg.add_argument(
+        "--assets-subdir", default="assets", help="Subfolder name for exported assets next to .md"
+    )
     outg.add_argument(
         "--write-meta",
         choices=("none", "sidecar", "inline"),
@@ -221,18 +245,26 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
 
     perf = parser.add_argument_group("Performance & reliability")
-    perf.add_argument("--workers", type=int, default=1, help="Parallel workers for file-level concurrency")
+    perf.add_argument(
+        "--workers", type=int, default=1, help="Parallel workers for file-level concurrency"
+    )
     perf.add_argument(
         "--on-error",
         choices=("skip", "fail"),
         default="skip",
         help="skip: log and continue; fail: stop immediately and return non-zero",
     )
-    perf.add_argument("--dry-run", action="store_true", help="Discover and plan outputs but do not write files")
+    perf.add_argument(
+        "--dry-run", action="store_true", help="Discover and plan outputs but do not write files"
+    )
 
     # Translation flags (additive; only used when --make-english)
     tr = parser.add_argument_group("Translation (English variant)")
-    tr.add_argument("--make-english", action="store_true", help="Create/refresh English Markdown variants (offline)")
+    tr.add_argument(
+        "--make-english",
+        action="store_true",
+        help="Create/refresh English Markdown variants (offline)",
+    )
     tr.add_argument(
         "--translator",
         choices=("ct2_nllb", "marian_opus"),
@@ -240,33 +272,47 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Translation engine to use (overrides settings_translation.engine)",
     )
     tr.add_argument("--tgt-lang", default="en", help="Target language code (default: en)")
-    tr.add_argument("--lang-detect", default="fast", help="Language detection engine hint (symbolic)")
+    tr.add_argument(
+        "--lang-detect", default="fast", help="Language detection engine hint (symbolic)"
+    )
     tr.add_argument(
         "--lang-candidates",
         default=None,
         help="Comma-separated language hints (e.g., sk,de,cs,pl,hu,en) for the detector",
     )
-    tr.add_argument("--segment-max-chars", type=int, default=None, help="Soft limit for per-segment size")
+    tr.add_argument(
+        "--segment-max-chars", type=int, default=None, help="Soft limit for per-segment size"
+    )
     tr.add_argument("--translate-link-label", choices=("true", "false"), default=None)
     tr.add_argument("--translate-alt-text", choices=("true", "false"), default=None)
     tr.add_argument("--translate-table-cells", choices=("true", "false"), default=None)
     tr.add_argument("--collapse-softbreaks", choices=("true", "false"), default=None)
-    tr.add_argument("--glossary-id", default=None, help="Glossary identifier to use (if enabled in settings)")
+    tr.add_argument(
+        "--glossary-id", default=None, help="Glossary identifier to use (if enabled in settings)"
+    )
     tr.add_argument(
         "--glossary-mode",
         choices=("pre", "post", "both", "none"),
         default=None,
         help="Override glossary mode for this run",
     )
-    tr.add_argument("--mt-cache", dest="mt_cache", default=None, help="Override translation cache root path")
-    tr.add_argument("--cache-disabled", action="store_true", help="Disable translation cache during this run")
+    tr.add_argument(
+        "--mt-cache", dest="mt_cache", default=None, help="Override translation cache root path"
+    )
+    tr.add_argument(
+        "--cache-disabled", action="store_true", help="Disable translation cache during this run"
+    )
     tr.add_argument(
         "--translate-on-error",
         choices=("skip", "fail_fast"),
         default="skip",
         help="Translation error policy: skip to continue; fail_fast to abort on first error",
     )
-    tr.add_argument("--translate-only", action="store_true", help="Skip convert phase and translate Markdown under --src")
+    tr.add_argument(
+        "--translate-only",
+        action="store_true",
+        help="Skip convert phase and translate Markdown under --src",
+    )
 
     diag = parser.add_argument_group("Logging & diagnostics")
     diag.add_argument(
@@ -281,9 +327,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default="auto",
         help="auto: progress bar if TTY (degrades to plain); plain: periodic lines; none: silent",
     )
-    diag.add_argument("--report", default=None, help="Optional path to write a JSON run report with per-file outcomes")
+    diag.add_argument(
+        "--report",
+        default=None,
+        help="Optional path to write a JSON run report with per-file outcomes",
+    )
     # New: optional log file path
-    diag.add_argument("--log-file", dest="log_file", default=None, help="Optional path to write a .log file")
+    diag.add_argument(
+        "--log-file", dest="log_file", default=None, help="Optional path to write a .log file"
+    )
 
     compat = parser.add_argument_group("Compatibility & policies")
     compat.add_argument("--strict", action="store_true", help="Promote certain warnings to errors")
@@ -293,14 +345,17 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default="lf",
         help="Force LF newlines or keep as produced by adapters",
     )
-    compat.add_argument("--locale", default=None, help="Locale hint for human-readable logs only (not rendering)")
+    compat.add_argument(
+        "--locale", default=None, help="Locale hint for human-readable logs only (not rendering)"
+    )
 
     return parser.parse_args(argv)
 
 
 # ----- Validation and logging setup -----
 
-def _validate_args(ns: argparse.Namespace) -> Tuple[Optional[EffectiveConfig], Optional[str]]:
+
+def _validate_args(ns: argparse.Namespace) -> tuple[EffectiveConfig | None, str | None]:
     # Paths
     try:
         src = Path(ns.src).expanduser().resolve()
@@ -328,16 +383,16 @@ def _validate_args(ns: argparse.Namespace) -> Tuple[Optional[EffectiveConfig], O
         return None, "--max-files must be a positive integer"
 
     # Include extensions
-    include_ext: List[str] = [
+    include_ext: list[str] = [
         _normalize_ext(x) for x in (ns.include_ext or list(_DEFAULT_INCLUDE_EXT))
     ]
     if not include_ext:
         return None, "--include-ext cannot be empty"
 
     # Exclude glob patterns
-    exclude_glob: List[str] = list(ns.exclude_glob or [])
+    exclude_glob: list[str] = list(ns.exclude_glob or [])
 
-    report_path: Optional[Path] = None
+    report_path: Path | None = None
     if ns.report:
         try:
             rp = Path(ns.report).expanduser()
@@ -349,7 +404,7 @@ def _validate_args(ns: argparse.Namespace) -> Tuple[Optional[EffectiveConfig], O
             return None, f"Invalid --report path: {ns.report} ({e})"
 
     # New: log file path (default to ./outputs/logs/cli_run.log when not provided)
-    log_file_path: Optional[Path] = None
+    log_file_path: Path | None = None
     try:
         lf_arg = getattr(ns, "log_file", None)
         if lf_arg:
@@ -386,7 +441,7 @@ def _validate_args(ns: argparse.Namespace) -> Tuple[Optional[EffectiveConfig], O
     return cfg, None
 
 
-def _setup_logging(level: str, *, log_file: Optional[Path] = None) -> None:
+def _setup_logging(level: str, *, log_file: Path | None = None) -> None:
     root = logging.getLogger()
     root.handlers.clear()
     lvl = getattr(logging, level.upper(), logging.INFO)
@@ -411,7 +466,10 @@ def _setup_logging(level: str, *, log_file: Optional[Path] = None) -> None:
 
 # ----- App layer integration -----
 
-def _call_app_convert(config: EffectiveConfig) -> Tuple[int, List[Mapping[str, Any]], Mapping[str, Any]]:
+
+def _call_app_convert(
+    config: EffectiveConfig,
+) -> tuple[int, list[Mapping[str, Any]], Mapping[str, Any]]:
     """Invoke the application conversion entry point and collect results.
 
     The function attempts, in order, to call the following app-layer APIs:
@@ -461,10 +519,10 @@ def _call_app_convert(config: EffectiveConfig) -> Tuple[int, List[Mapping[str, A
             else:
                 p = plan  # assume mapping-like
             candidates = p.get("candidates", [])
-            res: List[Mapping[str, Any]] = []
+            res: list[Mapping[str, Any]] = []
             for c in candidates:
                 # status SKIP for plan preview (we are not converting)
-                rec: Dict[str, Any] = {
+                rec: dict[str, Any] = {
                     "status": "SKIP",
                     "src": c.get("src_path") or c.get("src") or "?",
                     "dst": c.get("out_md_path") or c.get("dst") or "?",
@@ -527,7 +585,7 @@ def _call_app_convert(config: EffectiveConfig) -> Tuple[int, List[Mapping[str, A
             return 3, [], {"error": f"App layer unavailable: {e}"}
 
     # Normalize results
-    results: List[Mapping[str, Any]] = []
+    results: list[Mapping[str, Any]] = []
     summary: Mapping[str, Any] = {}
 
     def _append_normalized(item: Mapping[str, Any]) -> None:
@@ -555,8 +613,16 @@ def _call_app_convert(config: EffectiveConfig) -> Tuple[int, List[Mapping[str, A
             for fr in files:
                 # Map FileResult -> CLI record shape
                 status_raw = str(fr.get("status", "")).lower()
-                status = "OK" if status_raw == "ok" else ("SKIP" if status_raw == "skip" else ("FAIL" if status_raw == "fail" else status_raw.upper() or "?"))
-                rec: Dict[str, Any] = {
+                status = (
+                    "OK"
+                    if status_raw == "ok"
+                    else (
+                        "SKIP"
+                        if status_raw == "skip"
+                        else ("FAIL" if status_raw == "fail" else status_raw.upper() or "?")
+                    )
+                )
+                rec: dict[str, Any] = {
                     "status": status,
                     "src": fr.get("src_path") or fr.get("source") or "?",
                     "dst": fr.get("out_md_path") or fr.get("target") or "?",
@@ -632,6 +698,7 @@ def _call_app_convert(config: EffectiveConfig) -> Tuple[int, List[Mapping[str, A
 
 # ----- Rendering -----
 
+
 def _banner(cfg: EffectiveConfig) -> None:
     logging.info(
         "mdify starting | src=%s out=%s recurse=%s include=%s workers=%d",
@@ -643,8 +710,8 @@ def _banner(cfg: EffectiveConfig) -> None:
     )
 
 
-def _render_progress(results: Iterable[Mapping[str, Any]], *, mode: str) -> List[Mapping[str, Any]]:
-    collected: List[Mapping[str, Any]] = []
+def _render_progress(results: Iterable[Mapping[str, Any]], *, mode: str) -> list[Mapping[str, Any]]:
+    collected: list[Mapping[str, Any]] = []
     # For now, print per-file lines as they arrive (plain mode). If mode is none, collect silently.
     for rec in results:
         collected.append(rec)
@@ -662,12 +729,12 @@ def _render_progress(results: Iterable[Mapping[str, Any]], *, mode: str) -> List
     return collected
 
 
-def _summarize(collected: List[Mapping[str, Any]], extra: Mapping[str, Any]) -> Mapping[str, Any]:
+def _summarize(collected: list[Mapping[str, Any]], extra: Mapping[str, Any]) -> Mapping[str, Any]:
     total = len(collected)
     ok = sum(1 for r in collected if str(r.get("status", "")).upper() == "OK")
     skip = sum(1 for r in collected if str(r.get("status", "")).upper() == "SKIP")
     fail = sum(1 for r in collected if str(r.get("status", "")).upper() == "FAIL")
-    sum_map: Dict[str, Any] = {
+    sum_map: dict[str, Any] = {
         "scanned": extra.get("scanned", total),
         "matched": extra.get("matched", total),
         "converted": ok,
@@ -680,7 +747,8 @@ def _summarize(collected: List[Mapping[str, Any]], extra: Mapping[str, Any]) -> 
 
 # ----- Translation wiring (lazy) -----
 
-def _bool_from_flag(value: Optional[str]) -> Optional[bool]:
+
+def _bool_from_flag(value: str | None) -> bool | None:
     if value is None:
         return None
     s = str(value).strip().lower()
@@ -700,8 +768,10 @@ def _load_md_text(path: Path) -> str:
             return f.read()
 
 
-def _enumerate_md_originals_from_convert(results: List[Mapping[str, Any]], out_root: Path) -> List[Path]:
-    md_paths: List[Path] = []
+def _enumerate_md_originals_from_convert(
+    results: list[Mapping[str, Any]], out_root: Path
+) -> list[Path]:
+    md_paths: list[Path] = []
     for rec in results:
         st = str(rec.get("status", "")).upper()
         if st not in {"OK", "SKIP"}:
@@ -718,8 +788,8 @@ def _enumerate_md_originals_from_convert(results: List[Mapping[str, Any]], out_r
     return md_paths
 
 
-def _enumerate_md_originals_from_dir(src_dir: Path) -> List[Path]:
-    md_paths: List[Path] = []
+def _enumerate_md_originals_from_dir(src_dir: Path) -> list[Path]:
+    md_paths: list[Path] = []
     for dp, _dns, fns in __import__("os").walk(src_dir):
         d = Path(dp)
         for name in fns:
@@ -729,7 +799,12 @@ def _enumerate_md_originals_from_dir(src_dir: Path) -> List[Path]:
     return md_paths
 
 
-def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert_code: int, convert_results: List[Mapping[str, Any]]) -> Tuple[int, Optional[dict]]:
+def _run_translation_phase(
+    ns: argparse.Namespace,
+    cfg: EffectiveConfig,
+    convert_code: int,
+    convert_results: list[Mapping[str, Any]],
+) -> tuple[int, dict | None]:
     """Run translate(EN) flow if requested; returns (exit_code_override, report_section).
 
     exit_code_override: 0/1/3 to override main code, or -1 to keep convert_code.
@@ -740,11 +815,10 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
 
     # Lazy imports to avoid heavy startup
     try:
+        from .. import settings_translation as st  # type: ignore
         from ..app.ensure_english import ensure_english_for_batch  # type: ignore
         from ..domain.models_markdown import MarkdownDoc  # type: ignore
-        from ..domain.errors import WriteError, TranslationError  # type: ignore
         from ..domain.ports import WriterContext  # type: ignore
-        from .. import settings_translation as st  # type: ignore
     except Exception as e:
         logging.error("Translation components unavailable: %s", e)
         return 3, {"error": f"Translation components unavailable: {e}"}
@@ -815,6 +889,7 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
         # LangID: fastText
         from ..adapters.langid.fasttext_langid import FastTextLangId  # type: ignore
         from ..domain.ports import LanguageDetectError as _LangDetectErr  # type: ignore
+
         langid_cfg = dict(settings.get("langid", {}))
         _ft = FastTextLangId(
             str(langid_cfg.get("model_path")),
@@ -825,7 +900,13 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
 
         # Lightweight heuristic fallback to avoid hard-fail on FT runtime errors
         class _HeuristicLangId:
-            def detect(self, text: str, hints: Optional[dict[str, Any]] = None, *, context: Optional[dict[str, Any]] = None) -> Tuple[str, float]:  # type: ignore[override]
+            def detect(
+                self,
+                text: str,
+                hints: dict[str, Any] | None = None,
+                *,
+                context: dict[str, Any] | None = None,
+            ) -> tuple[str, float]:  # type: ignore[override]
                 s = (text or "")[: max(0, int(settings.get("langid", {}).get("max_chars", 5000)))]
                 s = s.lower()
                 if any(tok in s for tok in [" der ", " die ", " und ", " ist ", " nicht "]):
@@ -846,11 +927,19 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
             def __init__(self, primary: Any, fallback: Any) -> None:
                 self._p = primary
                 self._f = fallback
-            def detect(self, text: str, hints: Optional[dict[str, Any]] = None, *, context: Optional[dict[str, Any]] = None) -> Tuple[str, float]:  # type: ignore[override]
+
+            def detect(
+                self,
+                text: str,
+                hints: dict[str, Any] | None = None,
+                *,
+                context: dict[str, Any] | None = None,
+            ) -> tuple[str, float]:  # type: ignore[override]
                 try:
                     return self._p.detect(text, hints, context=context)
                 except _LangDetectErr:
                     return self._f.detect(text, hints, context=context)
+
             def capabilities(self) -> dict:
                 return {"name": "ft-with-heuristic-fallback", "deterministic": True}
 
@@ -861,10 +950,12 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
         cache_cfg = dict(settings.get("cache", {}))
         if bool(cache_cfg.get("enabled", False)):
             from ..adapters.cache.disk_cache import DiskCache  # type: ignore
+
             root_path = str(cache_cfg.get("root_path"))
             # Ensure parent directory exists
             try:
                 from pathlib import Path as _P
+
                 _P(root_path).parent.mkdir(parents=True, exist_ok=True)
             except Exception:
                 pass
@@ -887,6 +978,7 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
         gl_cfg = dict(settings.get("glossary", {}))
         if bool(gl_cfg.get("enabled", False)):
             from ..adapters.glossary.sqlite_glossary import SqliteGlossary  # type: ignore
+
             glossary = SqliteGlossary(
                 db_path=str(gl_cfg.get("db_path")),
                 default_glossary_id=gl_cfg.get("glossary_id"),
@@ -904,6 +996,7 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
         dec = dict(settings.get("decoding", {}))
         if engine == "marian_opus":
             from ..adapters.translate.marian_opus import MarianOpus  # type: ignore
+
             mar = dict(settings.get("marian", {}))
             dec_m = dict(dec.get("marian", {}))
             translator = MarianOpus(
@@ -926,6 +1019,7 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
             )
         elif engine == "ct2_nllb":
             from ..adapters.translate.ct2_nllb import NllbCTranslate2  # type: ignore
+
             ct2 = dict(settings.get("ct2_nllb", {}))
             dec_c = dict(dec.get("ct2", {}))
             translator = NllbCTranslate2(
@@ -962,7 +1056,16 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
 
     # Prepare writer context
     class _SimpleWriterCtx:
-        def __init__(self, *, out_root: Path, src_root: Path, assets_subdir: str, write_meta: str, overwrite: bool, dry_run: bool) -> None:
+        def __init__(
+            self,
+            *,
+            out_root: Path,
+            src_root: Path,
+            assets_subdir: str,
+            write_meta: str,
+            overwrite: bool,
+            dry_run: bool,
+        ) -> None:
             self.out_root = str(out_root)
             self.src_root = str(src_root)
             self.assets_subdir = str(assets_subdir)
@@ -973,7 +1076,7 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
             self.ensure_final_newline = True
 
     class _SimpleWriter:
-        def compute_paths(self, doc: Any, ctx: WriterContext) -> Dict[str, Optional[str]]:  # type: ignore[override]
+        def compute_paths(self, doc: Any, ctx: WriterContext) -> dict[str, str | None]:  # type: ignore[override]
             in_path = Path(getattr(doc, "path"))
             src_root = Path(ctx.src_root)
             out_root = Path(ctx.out_root)
@@ -986,14 +1089,18 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
             en_root = out_root / "en"
             out_md_path = (en_root / rel).with_suffix(".md")
             assets_dir = out_md_path.parent / ctx.assets_subdir
-            sidecar_path = out_md_path.with_suffix(out_md_path.suffix + ".meta.json") if ctx.write_meta == "sidecar" else None
+            sidecar_path = (
+                out_md_path.with_suffix(out_md_path.suffix + ".meta.json")
+                if ctx.write_meta == "sidecar"
+                else None
+            )
             return {
                 "out_md_path": str(out_md_path.resolve()),
                 "assets_dir": str(assets_dir.resolve()),
                 "sidecar_meta_path": str(sidecar_path) if sidecar_path else None,
             }
 
-        def write(self, doc: Any, ctx: WriterContext) -> Dict[str, Any]:  # type: ignore[override]
+        def write(self, doc: Any, ctx: WriterContext) -> dict[str, Any]:  # type: ignore[override]
             paths = self.compute_paths(doc, ctx)
             out_md = Path(paths["out_md_path"])  # type: ignore[index]
             out_md.parent.mkdir(parents=True, exist_ok=True)
@@ -1005,7 +1112,9 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
                 text_lf = str(text).replace("\r\n", "\n").replace("\r", "\n")
                 if ctx.write_meta == "inline":
                     meta = getattr(doc, "meta", {}) or {}
-                    header = f"<!-- meta: {json.dumps(meta, sort_keys=True, ensure_ascii=False)} -->\n"
+                    header = (
+                        f"<!-- meta: {json.dumps(meta, sort_keys=True, ensure_ascii=False)} -->\n"
+                    )
                     text_lf = header + text_lf
                 out_md.write_text(text_lf, encoding="utf-8", newline="\n")
                 bytes_written = len(text_lf.encode("utf-8"))
@@ -1013,7 +1122,11 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
                     sidecar = Path(paths["sidecar_meta_path"])  # type: ignore[index]
                     sidecar.parent.mkdir(parents=True, exist_ok=True)
                     meta = getattr(doc, "meta", {}) or {}
-                    sidecar.write_text(json.dumps(meta, ensure_ascii=False, sort_keys=True), encoding="utf-8", newline="\n")
+                    sidecar.write_text(
+                        json.dumps(meta, ensure_ascii=False, sort_keys=True),
+                        encoding="utf-8",
+                        newline="\n",
+                    )
             return {
                 "status": status,
                 "out_md_path": str(out_md),
@@ -1047,7 +1160,9 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
         if not md_inputs:
             guess = _enumerate_md_originals_from_dir(cfg.src)
             if guess:
-                logging.info("No converted outputs detected; switching to translate-only mode over Markdown under --src")
+                logging.info(
+                    "No converted outputs detected; switching to translate-only mode over Markdown under --src"
+                )
                 md_inputs = guess
 
     # Build MarkdownDoc list
@@ -1064,7 +1179,11 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
         except Exception:
             rel = p.name
         doc_id = f"md::{rel}"
-        docs.append(MarkdownDoc(doc_id=doc_id, path=str(p), variant="original", lang=None, text_md=text_md, meta={}))
+        docs.append(
+            MarkdownDoc(
+                doc_id=doc_id, path=str(p), variant="original", lang=None, text_md=text_md, meta={}
+            )
+        )
 
     # Ports bundle expected by ensure_english
     class _Ports:
@@ -1079,7 +1198,7 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
     ports = _Ports()
 
     # Build cfg for batch ensure
-    en_cfg: Dict[str, Any] = {
+    en_cfg: dict[str, Any] = {
         "tgt_lang": tgt_lang,
         "style": "natural",
         "glossary_id": ns.glossary_id,
@@ -1094,9 +1213,16 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
         "writer_ctx": writer_ctx,
     }
 
-    logging.info("Translate starting | docs=%d on_error=%s workers=%d", len(docs), en_cfg["on_error"], en_cfg["workers"])
+    logging.info(
+        "Translate starting | docs=%d on_error=%s workers=%d",
+        len(docs),
+        en_cfg["on_error"],
+        en_cfg["workers"],
+    )
 
-    batch = ensure_english_for_batch(docs, ports, en_cfg, context={"run_id": datetime.now(timezone.utc).isoformat()})
+    batch = ensure_english_for_batch(
+        docs, ports, en_cfg, context={"run_id": datetime.now(UTC).isoformat()}
+    )
 
     # Render translation summary
     logging.info(
@@ -1106,7 +1232,7 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
         batch.get("skipped_exists"),
         batch.get("skipped_already_en"),
         batch.get("failed"),
-        float((batch.get("wall_millis") or 0.0)) / 1000.0,
+        float(batch.get("wall_millis") or 0.0) / 1000.0,
     )
 
     # Determine exit code override
@@ -1132,7 +1258,8 @@ def _run_translation_phase(ns: argparse.Namespace, cfg: EffectiveConfig, convert
 
 # ----- Public entry point -----
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+
+def main(argv: Sequence[str] | None = None) -> int:
     """Run the mdify CLI, parse options, and invoke the conversion app entry point.
 
     Description:
@@ -1194,7 +1321,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # If translate-only requested, skip convert and enumerate .md under --src
     convert_code = 0
-    results: List[Mapping[str, Any]] = []
+    results: list[Mapping[str, Any]] = []
     summary: Mapping[str, Any] = {"matched": 0, "scanned": 0, "duration_sec": 0.0}
     if getattr(ns, "translate_only", False):
         logging.info("Translate-only mode: skipping convert phase")
@@ -1227,7 +1354,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if cfg.report:
         try:
             payload = {
-                "started": datetime.now(timezone.utc).isoformat(),
+                "started": datetime.now(UTC).isoformat(),
                 "config": cfg.as_app_config(),
                 "results": list(results),
                 "summary": dict(_summarize(results, summary)),

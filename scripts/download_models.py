@@ -12,6 +12,7 @@ Module CLI Parameters:
 Returns:
     This script does not return a value; exits with status code 0 on success or 1 on error.
 """
+
 import argparse
 import sys
 
@@ -41,21 +42,24 @@ def main():
         description="Download NMT models for offline usage into local cache"
     )
     parser.add_argument(
-        "--models", nargs='+', required=False,
+        "--models",
+        nargs="+",
+        required=False,
         default=[
             "Helsinki-NLP/opus-mt-en-de",
             "facebook/m2m100_418M",
             "facebook/nllb-200-distilled-600M",
         ],
-        help="List of Hugging Face model identifiers to download"
+        help="List of Hugging Face model identifiers to download",
     )
     parser.add_argument(
-        "--cache_dir", type=str, default=None,
-        help="Optional cache directory override"
+        "--cache_dir", type=str, default=None, help="Optional cache directory override"
     )
     parser.add_argument(
-        "--allow_patterns", nargs='+', default=None,
-        help="Optional list of file patterns (regex) to include only certain files"
+        "--allow_patterns",
+        nargs="+",
+        default=None,
+        help="Optional list of file patterns (regex) to include only certain files",
     )
     args = parser.parse_args()
 

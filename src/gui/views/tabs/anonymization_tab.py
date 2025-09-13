@@ -9,7 +9,6 @@ from ..qt import (
     QTextEdit,
     QPushButton,
     QComboBox,
-    QLabel,
 )
 
 from ...services.facade import GuiServices

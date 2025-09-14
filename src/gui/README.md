@@ -33,9 +33,10 @@ New UI features
   - Translate-only: skip convert and translate existing Markdown under Source.
   - Translator: choose engine (auto, marian_opus, ct2_nllb).
   - Translate button: runs the translation phase and writes a JSON report under outputs/logs/.
-- Inline help buttons: question-mark (?) buttons next to key actions
-  (Plan / Run / Translate in Preprocess; Detect / Pseudonymize / De-anonymize in Anonymization).
-  Clicking a ? writes a short explanation into the tab's output area.
+- Language detection tuning (new):
+  - Preprocess tab: LangID candidates, max chars, min chars (passed to CLI).
+  - Language Detection tab: candidates + adjustable max/min chars for on-the-fly checks.
+  - Environment overrides honored globally: HABITHON_LANGID_MAX_CHARS, HABITHON_LANGID_MIN_CHARS.
 
 Usage tips
 - Convert flow: set Source/Output and options, click Plan to preview, then Run.
@@ -45,6 +46,7 @@ Usage tips
 
 Tabs
 - Preprocess: plan and run convert-only Markdown pipeline (folder -> .md) and translation.
+- Language Detection: detect the primary language of a document (with candidates/window tuning).
 - Anonymization: detect, pseudonymize (with context), and de-anonymize sample text.
 - Jobs: placeholder for history and logs.
 - Settings: environment/session settings and preflight.
@@ -54,6 +56,7 @@ Service facade
   - convert_plan(cfg) -> Plan
   - convert_run(cfg) -> RunResult
   - translate_run(cfg, make_english, translate_only, translator?) -> {code, report}
+  - lang_detect_file(file, candidates?, max_chars?, min_chars?) -> {lang, confidence, engine}
   - anon_detect(text, language)
   - anon_pseudonymize(text, context_id, language)
   - anon_deanonymize(text, context_id)

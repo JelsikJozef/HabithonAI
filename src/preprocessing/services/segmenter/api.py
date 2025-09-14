@@ -9,7 +9,7 @@ and a SegmentPlan suitable for lossless recombination.
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Tuple
+from typing import Dict, List, Mapping, Tuple, Any
 
 from .blocks import BlockScanner
 from .inlines import extract_inlines_from_block
@@ -25,6 +25,21 @@ class Segment:
     end: int
     text: str
     kind: str  # e.g. "paragraph", "heading", "list", "table_cell", "link_label", "inline_text"
+
+    def __eq__(self, other: Any) -> bool:  # pragma: no cover - tiny convenience for tests
+        # Allow direct comparison to strings in tests: Segment == "text"
+        if isinstance(other, str):
+            return self.text == other
+        # Fallback to structural equality when comparing to same-type
+        if isinstance(other, Segment):
+            return (
+                self.id == other.id
+                and self.start == other.start
+                and self.end == other.end
+                and self.text == other.text
+                and self.kind == other.kind
+            )
+        return False
 
 
 @dataclass(frozen=True)

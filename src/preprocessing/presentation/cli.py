@@ -281,6 +281,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Comma-separated language hints (e.g., sk,de,cs,pl,hu,en) for the detector",
     )
     tr.add_argument(
+        "--lang-max-chars",
+        type=int,
+        default=None,
+        help="Maximum characters of cleaned text to analyze for language detection (default from settings)",
+    )
+    tr.add_argument(
+        "--lang-min-chars",
+        type=int,
+        default=None,
+        help="Minimum characters required before trusting detector scores (default from settings)",
+    )
+    tr.add_argument(
         "--segment-max-chars", type=int, default=None, help="Soft limit for per-segment size"
     )
     tr.add_argument("--translate-link-label", choices=("true", "false"), default=None)
@@ -799,6 +811,91 @@ def _enumerate_md_originals_from_dir(src_dir: Path) -> list[Path]:
     return md_paths
 
 
+def _try_autobuild_ct2_model(settings: dict) -> bool:
+    """Attempt to build a CT2 model dir from an offline HF cache snapshot if missing.
+
+    - Searches outputs/mt_cache/models--facebook--nllb-200-distilled-600M/snapshots/*
+    - Uses ctranslate2.converters.TransformersConverter to convert into ct2_nllb.model_dir
+    - Copies tokenizer files if present; never accesses network. Returns True on success.
+    """
+    try:
+        ct2_cfg = dict(settings.get("ct2_nllb", {}))
+        target_dir = str(ct2_cfg.get("model_dir") or "").strip()
+        if not target_dir:
+            return False
+        from pathlib import Path as _P
+        import shutil as _sh
+        import os as _os
+
+        tgt = _P(target_dir)
+        if tgt.is_dir():
+            return True
+        roots = [
+            _P("outputs/mt_cache/models--facebook--nllb-200-distilled-600M/snapshots"),
+            _P("outputs/mt_cache/hub/models--facebook--nllb-200-distilled-600M/snapshots"),
+        ]
+        snap: _P | None = None
+        for r in roots:
+            if r.exists() and r.is_dir():
+                snaps = [r / s for s in _os.listdir(r) if (r / s).is_dir()]
+                if snaps:
+                    snaps.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                    snap = snaps[0]
+                    break
+        if snap is None:
+            return False
+        # Lazy import; skip if unavailable
+        try:
+            from ctranslate2.converters.transformers import TransformersConverter  # type: ignore
+        except Exception:
+            return False
+        tgt.parent.mkdir(parents=True, exist_ok=True)
+        tmp_out = tgt.parent / (tgt.name + ".tmp")
+        if tmp_out.exists():
+            try:
+                _sh.rmtree(tmp_out)
+            except Exception:
+                return False
+        # Quantization selection
+        compute_type = str(ct2_cfg.get("compute_type", "int8") or "int8").lower()
+        quant = compute_type if compute_type in {"int8", "int16", "float16"} else None
+        try:
+            conv = TransformersConverter(str(snap))
+            conv.convert(str(tmp_out), quantization=quant)
+        except Exception:
+            try:
+                if tmp_out.exists():
+                    _sh.rmtree(tmp_out)
+            except Exception:
+                pass
+            return False
+        for name in (
+            "sentencepiece.model",
+            "spm.model",
+            "sentencepiece.bpe.model",
+            "tokenizer.model",
+        ):
+            src = snap / name
+            if src.exists():
+                try:
+                    _sh.copy2(src, tmp_out / name)
+                except Exception:
+                    pass
+        try:
+            _sh.move(str(tmp_out), str(tgt))
+        except Exception:
+            try:
+                if tmp_out.exists():
+                    _sh.rmtree(tmp_out)
+            except Exception:
+                pass
+            return False
+        settings.setdefault("ct2_nllb", {})["model_dir"] = str(tgt)
+        return tgt.is_dir()
+    except Exception:
+        return False
+
+
 def _run_translation_phase(
     ns: argparse.Namespace,
     cfg: EffectiveConfig,
@@ -850,6 +947,19 @@ def _run_translation_phase(
     cand = getattr(ns, "lang_candidates", None)
     if cand:
         langid_cfg["candidates"] = [s.strip().lower() for s in str(cand).split(",") if s.strip()]
+    # Apply optional overrides for detector window
+    mx = getattr(ns, "lang_max_chars", None)
+    if mx is not None:
+        try:
+            langid_cfg["max_chars"] = int(mx)
+        except Exception:
+            pass
+    mn = getattr(ns, "lang_min_chars", None)
+    if mn is not None:
+        try:
+            langid_cfg["min_chars"] = int(mn)
+        except Exception:
+            pass
     settings["langid"] = langid_cfg
     # Glossary
     gls = dict(settings.get("glossary", {}))
@@ -877,10 +987,40 @@ def _run_translation_phase(
     # Validate settings early
     ok, issues = st.validate_translation_settings(settings)
     if not ok:
+        # Try offline auto-build when CT2 dir is missing
+        missing_ct2 = next((m for m in issues if "CT2/NLLB model_dir not found" in str(m)), None)
+        if missing_ct2:
+            try:
+                built = _try_autobuild_ct2_model(settings)
+            except Exception:
+                built = False
+            if built:
+                ok, issues = st.validate_translation_settings(settings)
+        # Fallback to Marian if CT2 still unavailable
+        if not ok and str(settings.get("engine")) == "ct2_nllb":
+            logging.warning(
+                "CT2 model unavailable; falling back to Marian OPUS (offline) for this run"
+            )
+            settings["engine"] = "marian_opus"
+            # Prefer outputs/mt_cache when available
+            try:
+                from pathlib import Path as _P
+
+                mar = dict(settings.get("marian", {}))
+                cache_dir = mar.get("hf_cache_dir")
+                if not cache_dir or not _P(str(cache_dir)).exists():
+                    oc = _P("outputs/mt_cache")
+                    if oc.exists():
+                        mar["hf_cache_dir"] = str(oc)
+                        settings["marian"] = mar
+            except Exception:
+                pass
+            ok, issues = st.validate_translation_settings(settings)
+    if not ok:
         for msg in issues:
             logging.error("Config: %s", msg)
         logging.error("Translation settings invalid; aborting")
-        return 2, {"errors": issues}
+        return 3, {"error": "Translation settings invalid", "issues": issues}
 
     logging.info("Translate capabilities: %s", st.capabilities_summary(settings))
 
@@ -1268,34 +1408,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         function, render progress and per-file outcomes, optionally write a run
         report JSON, and return an appropriate exit code. The CLI performs no
         heavy lifting itself; it is deterministic and suitable for batch use.
-
-    Args:
-        argv (Sequence[str] | None):
-            Optional override for command-line arguments. When None, sys.argv[1:]
-            is used. Supply a custom sequence for testing.
-
-    Returns:
-        int: Process exit code, with the following semantics:
-            0 → all selected files converted successfully (warnings allowed)
-            1 → completed with some errors (at least one file failed)
-            2 → argument/usage error (invalid paths, conflicting flags)
-            3 → fatal initialization error (e.g., app layer cannot be created)
-
-    Raises:
-        None directly. Exceptions are caught and translated into the appropriate
-        exit code and concise user-facing messages.
-
-    Notes:
-        - CLI flags override environment or default configuration.
-        - In --dry-run mode, no filesystem writes are performed and the output
-        directory is not created.
-        - In --write-meta=inline mode, the application may still emit a minimal
-        sidecar for machine-readable stats if necessary; this is documented by
-        the app layer and preserved here for clarity.
-
-    Examples:
-        mdify --src ./docs --out ./out/md --include-ext .pdf .docx --skip-existing --workers 4
-        mdify --src /data/in --out /data/out --no-recurse --max-files 100 --dry-run --progress plain
     """
     ns = parse_args(argv)
 

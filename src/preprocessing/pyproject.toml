@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "habithon-preprocessing"
-version = "0.3.1"
-description = "Folder→Markdown converter with optional offline English translation (ct2_nllb / marian_opus) via the mdify CLI."
+version = "0.3.2"
+description = "Folder→Markdown converter with optional offline English translation (ct2_nllb / marian_opus) and tunable language detection via the mdify CLI."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [

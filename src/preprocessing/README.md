@@ -34,7 +34,7 @@ How it works:
   - ct2_nllb: CTranslate2 runtime with NLLB model; SentencePiece tokenizer.
   - marian_opus: Hugging Face Transformers Marian models (CPU by default). Must exist in local cache or as local paths.
 - Markdown segmenter: Extracts only human text nodes; preserves code fences/inline code, link and image destinations, headings, tables, and spacing. Options let you translate link labels, alt text, and table cells, and control soft-break collapsing.
-- Glossary (optional): Apply pre/post/both substitutions on plain-text segments.
+- Glossary (optional): Apply pre/post/both substitutions on plain text segments.
 - Cache (optional): Per-segment translation cache keyed by a deterministic engine fingerprint plus segment text/context.
 
 Outputs:
@@ -71,6 +71,15 @@ mdify --src ./out --out ./out \
   --translator marian_opus --workers 2
 ```
 
+Improve routing on mixed-language corpora (new LangID tuning):
+
+```bash
+# Constrain candidates and widen the detector window
+mdify --src ./in --out ./out \
+  --make-english --translator ct2_nllb \
+  --lang-candidates sk,de,cs,en --lang-max-chars 20000 --lang-min-chars 80
+```
+
 Common flags:
 - Scanning & selection (convert):
   - --recurse | --no-recurse
@@ -91,6 +100,8 @@ Common flags:
   - --translate-only (skip convert; scan Markdown under --src)
   - --tgt-lang en (default)
   - --lang-candidates sk,de,cs,pl,hu,en
+  - --lang-max-chars N   # new: widen detector text window
+  - --lang-min-chars N   # new: minimum length before trusting scores
   - --segment-max-chars N
   - --translate-link-label true|false
   - --translate-alt-text true|false
@@ -140,6 +151,8 @@ Environment overrides (examples):
 - HABITHON_TRANSLATION_ENGINE=ct2_nllb|marian_opus
 - HABITHON_CT2_MODEL_DIR=/abs/path/to/ct2-nllb-model
 - HABITHON_LANGID_MODEL_PATH=/abs/path/to/lid.176.bin
+- HABITHON_LANGID_MAX_CHARS=20000   # new
+- HABITHON_LANGID_MIN_CHARS=80      # new
 - HABITHON_MT_CACHE_PATH=/abs/path/to/mt_cache.sqlite
 - HABITHON_IO_WORKERS=4, HABITHON_IO_OVERWRITE=1
 

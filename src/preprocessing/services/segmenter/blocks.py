@@ -49,7 +49,7 @@ class BlockScanner:
     _re_code_fence = re.compile(r"^\s*([`~]{3,})([^\n]*)$")
     _re_table_delim = re.compile(r"^\s*\|?(\s*:?[-]{3,}:?\s*\|)+\s*:?[-]{3,}:?\s*\|?\s*$")
     _re_html_start = re.compile(r"^\s*<([A-Za-z][A-Za-z0-9-]*)(\s[^>]*)?>\s*$")
-    _re_html_end = re.compile(r"^\s*</([A-Za-z][A-Za-z0-9-]*)>\s*$")
+    _re_html_end = re.compile(r"^\s*</([A-Za-z][A-ZaZ0-9-]*)>\s*$")
 
     def __init__(self, md_text: str) -> None:
         self._md = md_text
@@ -126,23 +126,28 @@ class BlockScanner:
                 i += 1
                 continue
 
-            # Table: lookahead for delimiter row
-            if "|" in line and i + 1 < n and self._re_table_delim.match(self._lines[i + 1]):
-                i_end4 = i + 2
-                while (
-                    i_end4 < n
-                    and "|" in self._lines[i_end4]
-                    and not self._lines[i_end4].strip().startswith("#")
-                    and not self._re_code_fence.match(self._lines[i_end4])
-                ):
-                    if self._lines[i_end4].strip() == "":
-                        break
-                    i_end4 += 1
-                abs_end4 = self._line_starts[i_end4] if i_end4 <= n else len(md)
-                logger.debug("table at %d..%d", abs_start, abs_end4)
-                yield Block("table", abs_start, abs_end4, {})
-                i = i_end4
-                continue
+            # Table: lookahead for delimiter row (allow single blank line in between)
+            if "|" in line:
+                k = i + 1
+                # Skip a single optional blank line
+                if k < n and self._lines[k].strip() == "":
+                    k += 1
+                if k < n and self._re_table_delim.match(self._lines[k]):
+                    i_end4 = k + 1
+                    while (
+                        i_end4 < n
+                        and "|" in self._lines[i_end4]
+                        and not self._lines[i_end4].strip().startswith("#")
+                        and not self._re_code_fence.match(self._lines[i_end4])
+                    ):
+                        if self._lines[i_end4].strip() == "":
+                            break
+                        i_end4 += 1
+                    abs_end4 = self._line_starts[i_end4] if i_end4 <= n else len(md)
+                    logger.debug("table at %d..%d", abs_start, abs_end4)
+                    yield Block("table", abs_start, abs_end4, {})
+                    i = i_end4
+                    continue
 
             # Blockquote
             m_bq = self._re_blockquote.match(line)

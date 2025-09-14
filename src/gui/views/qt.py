@@ -62,6 +62,9 @@ except Exception:  # pragma: no cover - stub fallback
         def __init__(self, *args, **kwargs):
             pass
 
+        def setToolTip(self, *args, **kwargs):
+            pass
+
     class _Layout:
         def __init__(self, *args, **kwargs):
             pass
@@ -153,6 +156,11 @@ except Exception:  # pragma: no cover - stub fallback
         @staticmethod
         def getExistingDirectory(*args, **kwargs) -> str:
             return ""
+
+        @staticmethod
+        def getOpenFileName(*args, **kwargs):
+            # Return tuple (path, filter)
+            return ("", "")
 
     class QCheckBox(_Widget):
         def setChecked(self, *args, **kwargs):

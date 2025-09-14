@@ -69,11 +69,22 @@ mdify --src ./out --out ./out \
   --translator marian_opus --workers 2
 ```
 
+**Lepšie smerovanie pri zmiešaných jazykoch (nové nastavenia LangID):**
+```bash
+# Obmedzte kandidátov a zväčšite analyzované okno pre detekciu jazyka
+mdify --src ./in --out ./out \
+  --make-english --translator ct2_nllb \
+  --lang-candidates sk,de,cs,en --lang-max-chars 20000 --lang-min-chars 80
+```
+
 **Hlavné príznaky:**
 - **Scanning & selection (convert)**: `--recurse`, `--include-ext`, `--exclude-glob`, `--max-files`
 - **Output & writing**: `--overwrite`/`--skip-existing`, `--assets-subdir`, `--write-meta` (none|sidecar|inline)
 - **Performance**: `--workers`, `--on-error` (skip|fail), `--dry-run`
-- **Translation**: `--make-english`, `--translator` (ct2_nllb|marian_opus), `--translate-only`, `--tgt-lang`, `--lang-candidates`, `--segment-max-chars`, `--translate-link-label`, `--translate-alt-text`, `--translate-table-cells`, `--collapse-softbreaks`, `--glossary-id`, `--glossary-mode`, `--mt-cache`, `--cache-disabled`, `--translate-on-error`
+- **Translation**: `--make-english`, `--translator` (ct2_nllb|marian_opus), `--translate-only`, `--tgt-lang`,
+  `--lang-candidates`, `--lang-max-chars` (nové), `--lang-min-chars` (nové),
+  `--segment-max-chars`, `--translate-link-label`, `--translate-alt-text`, `--translate-table-cells`, `--collapse-softbreaks`,
+  `--glossary-id`, `--glossary-mode`, `--mt-cache`, `--cache-disabled`, `--translate-on-error`
 - **Diagnostics**: `--log-level`, `--progress`, `--report`, `--log-file`
 - **Kompatibilita**: `--normalize-eol`, `--strict`
 
@@ -101,8 +112,10 @@ Jednotlivé sekcie konfigurácie:
 
 Funkcie: `validate_translation_settings(cfg)` → (ok, issues), `capabilities_summary(cfg)` → stručné info.
 
-Env. premenné na prepísanie:
-- `HABITHON_TRANSLATION_ENGINE`, `HABITHON_CT2_MODEL_DIR`, `HABITHON_LANGID_MODEL_PATH`, `HABITHON_MT_CACHE_PATH`, `HABITHON_IO_WORKERS`, `HABITHON_IO_OVERWRITE`
+Env. premenné na prepísanie (príklady):
+- `HABITHON_TRANSLATION_ENGINE`, `HABITHON_CT2_MODEL_DIR`, `HABITHON_LANGID_MODEL_PATH`
+- `HABITHON_LANGID_MAX_CHARS=20000` (nové), `HABITHON_LANGID_MIN_CHARS=80` (nové)
+- `HABITHON_MT_CACHE_PATH`, `HABITHON_IO_WORKERS`, `HABITHON_IO_OVERWRITE`
 
 
 ## Výstupná štruktúra a anglická varianta

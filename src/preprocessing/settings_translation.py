@@ -111,7 +111,7 @@ _CT2_THREADS = _env_int("HABITHON_CT2_THREADS", _cpu_default_half())
 _MARIAN_DEVICE = (_env("HABITHON_MARIAN_DEVICE", "cpu") or "cpu").strip()
 _MARIAN_DTYPE = (_env("HABITHON_MARIAN_DTYPE", "auto") or "auto").strip()
 # Prefer a repo-local HF cache dir by default to support offline
-_MARIAN_CACHE_DIR = _env("HABITHON_MARIAN_CACHE_DIR", "resources/models/hf")
+_MARIAN_CACHE_DIR = _env("HABITHON_MARIAN_CACHE_DIR", "outputs/mt_cache")
 
 # IO/log overrides
 _IO_OVERWRITE = _env_bool("HABITHON_IO_OVERWRITE", False)
@@ -139,6 +139,10 @@ _MARIAN_MODELS = {
     "pl": "Helsinki-NLP/opus-mt-pl-en",
     "hu": "Helsinki-NLP/opus-mt-hu-en",
 }
+
+# New: LangID sampling window overrides via environment
+_LANGID_MAX_CHARS = _env_int("HABITHON_LANGID_MAX_CHARS", 5000)
+_LANGID_MIN_CHARS = _env_int("HABITHON_LANGID_MIN_CHARS", 50)
 
 
 # ---------------------------
@@ -198,8 +202,8 @@ _translation = {
     "langid": {
         "impl": "fasttext",
         "model_path": _DEFAULT_LANGID_MODEL,
-        "max_chars": 5000,
-        "min_chars": 50,
+        "max_chars": _LANGID_MAX_CHARS,
+        "min_chars": _LANGID_MIN_CHARS,
         "candidates": ["sk", "de", "cs", "pl", "hu", "en"],
     },
     # 6) Glossary integration (optional)

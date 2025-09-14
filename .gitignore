@@ -22,3 +22,8 @@ docker
 # OS
 .DS_Store
 Thumbs.db
+
+# Model artifacts and large offline resources
+resources/models/
+# Example: local MT cache (sqlite) and other large runtime caches
+mt_cache/

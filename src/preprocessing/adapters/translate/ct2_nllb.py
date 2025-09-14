@@ -271,6 +271,13 @@ class NllbCTranslate2(TranslatePort):
             self._translator = ct2.Translator(
                 self._model_dir, device=self._eng.device, compute_type=self._eng.compute_type
             )  # type: ignore[assignment]
+            # Configure threading at the translator level when specified
+            try:
+                if self._eng.num_threads and hasattr(self._translator, "set_num_threads"):
+                    self._translator.set_num_threads(int(self._eng.num_threads))  # type: ignore[union-attr]
+            except Exception:
+                # If the backend/version does not support setting threads, continue with defaults
+                pass
         except Exception as exc:  # pragma: no cover - depends on environment
             raise TranslationError(
                 "model not available",
@@ -286,6 +293,9 @@ class NllbCTranslate2(TranslatePort):
         sp_model_candidates = [
             os.path.join(self._model_dir, "sentencepiece.model"),
             os.path.join(self._model_dir, "spm.model"),
+            # Common HF naming for NLLB/M2M
+            os.path.join(self._model_dir, "sentencepiece.bpe.model"),
+            os.path.join(self._model_dir, "tokenizer.model"),
         ]
         sp_path = next((p for p in sp_model_candidates if os.path.isfile(p)), None)
         if sp_path is None:
@@ -718,15 +728,26 @@ class NllbCTranslate2(TranslatePort):
             return []
         assert self._translator is not None and self._sp is not None
 
-        # Prepare tokenized inputs with source tag prefix
+        def _lang_token(tag: str) -> str:
+            # NLLB expects language tags as special tokens like '__eng_Latn__'
+            if tag.startswith("__") and tag.endswith("__"):
+                return tag
+            return f"__{tag}__"
+
+        src_tok = _lang_token(src_tag)
+        tgt_tok = _lang_token(tgt_tag)
+        # Tokenize language tokens using SentencePiece to match model vocab
+        src_prefix_tokens = list(self._sp.EncodeAsPieces(src_tok))  # type: ignore[attr-defined]
+        tgt_prefix_tokens = list(self._sp.EncodeAsPieces(tgt_tok))  # type: ignore[attr-defined]
+
+        # Prepare tokenized inputs with source tag prefix (tokenized)
         inputs_tok: list[list[str]] = []
         for txt in batch_texts:
-            # Encode to sentencepiece pieces; keep as strings for CT2
-            pieces = list(self._sp.EncodeAsPieces(txt))  # type: ignore[attr-defined]
-            inputs_tok.append([src_tag] + pieces)
+            text_tokens = list(self._sp.EncodeAsPieces(txt))  # type: ignore[attr-defined]
+            inputs_tok.append(src_prefix_tokens + text_tokens)
 
-        # Target prefix uses target language tag token
-        target_prefix = [[tgt_tag] for _ in batch_texts]
+        # Target prefix uses tokenized target language tag
+        target_prefix = [tgt_prefix_tokens for _ in batch_texts]
 
         try:
             # We call translate_batch on tokenized inputs. Disable sampling; set beam size and length_penalty.
@@ -735,13 +756,12 @@ class NllbCTranslate2(TranslatePort):
                 inputs_tok,
                 beam_size=self._eng.beam_size,
                 length_penalty=self._eng.length_penalty,
-                sampling_topk=0,  # ensure no sampling path
+                sampling_topk=0,
                 sampling_topp=0,
                 num_hypotheses=1,
                 return_scores=False,
                 target_prefix=target_prefix,
                 max_batch_size=self._eng.max_batch_size,
-                num_threads=self._eng.num_threads,
             )
         except Exception as exc:
             raise TranslationError(
@@ -753,15 +773,16 @@ class NllbCTranslate2(TranslatePort):
                 },
             )
 
-        # Extract the single hypothesis and detokenize via sentencepiece
         outputs: list[str] = []
         try:
             for res in results:
-                # Each result has hypotheses as list of token lists
                 tokens = res.hypotheses[0] if hasattr(res, "hypotheses") else res[0]  # type: ignore[index]
-                # Drop the leading target tag if present
-                if tokens and tokens[0] == tgt_tag:
-                    tokens = tokens[1:]
+                # Strip tokenized target prefix if present
+                if (
+                    len(tokens) >= len(tgt_prefix_tokens)
+                    and tokens[: len(tgt_prefix_tokens)] == tgt_prefix_tokens
+                ):
+                    tokens = tokens[len(tgt_prefix_tokens) :]
                 text = self._sp.DecodePieces(tokens)  # type: ignore[attr-defined]
                 outputs.append(text)
         except Exception as exc:

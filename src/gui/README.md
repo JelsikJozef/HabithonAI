@@ -32,11 +32,30 @@ New UI features
   - Make English variant: request English Markdown creation.
   - Translate-only: skip convert and translate existing Markdown under Source.
   - Translator: choose engine (auto, marian_opus, ct2_nllb).
-  - Translate button: runs the translation phase and writes a JSON report under outputs/logs/.
-- Language detection tuning (new):
-  - Preprocess tab: LangID candidates, max chars, min chars (passed to CLI).
-  - Language Detection tab: candidates + adjustable max/min chars for on-the-fly checks.
+  - Advanced routing controls with helpful tooltip buttons (?) for all parameters.
+- Language detection tuning (unified across tabs):
+  - Preprocess tab: Candidates, max chars, min chars with helpful tooltips.
+  - Language Detection tab: Multiple analysis modes with advanced routing options.
   - Environment overrides honored globally: HABITHON_LANGID_MAX_CHARS, HABITHON_LANGID_MIN_CHARS.
+- Advanced routing system (model-only):
+  - Intelligent probe selection when language detection is ambiguous.
+  - Quality validation using English confidence and similarity analysis.
+  - Deterministic retry ladder across engines and source languages.
+  - Comprehensive routing telemetry in translation reports.
+  - Helpful (?) tooltip buttons explaining each parameter's purpose.
+
+Advanced routing features
+- Preprocess tab: Full integration with translation workflow
+  - Enable/disable advanced routing with smart UI state management.
+  - Configurable thresholds: τ_low (low confidence), δ_close (close margin), τ_en (English threshold).
+  - Near-identity detection and probe settings with helpful explanations.
+  - Real-time parameter validation and environment variable injection.
+- Language Detection tab: Three analysis modes
+  - Basic Detection: Simple language identification.
+  - Top-K Analysis: Multiple candidates with confidence scores and detection flags.
+  - Advanced Routing: Full routing analysis with probe simulation and translation quality tests.
+  - Interactive controls with live enable/disable state management.
+  - Detailed result display showing routing decisions and validation outcomes.
 
 Usage tips
 - Convert flow: set Source/Output and options, click Plan to preview, then Run.

@@ -21,6 +21,13 @@ Environment overrides (read at import):
 - HABITHON_IO_DRY_RUN                   -> "1"/"true" to enable dry-run
 - HABITHON_IO_WORKERS                   -> integer worker count
 - HABITHON_LOG_LEVEL                    -> "DEBUG"|"INFO"|"WARN"
+- HABITHON_ROUTING_TAU_LOW             -> float low-confidence threshold for LangID
+- HABITHON_ROUTING_DELTA_CLOSE         -> float top1-top2 closeness margin
+- HABITHON_ROUTING_TAU_EN              -> float minimum EN confidence for outputs
+- HABITHON_ROUTING_SIM_NOOP            -> float similarity threshold to flag identity
+- HABITHON_ROUTING_PROBE_K             -> int number of candidates to probe at most
+- HABITHON_ROUTING_PROBE_SLICE_CHARS   -> int chars for probe slice
+- HABITHON_ROUTING_MAX_RETRIES         -> int maximum retries across ladder
 
 Precedence: environment -> defaults in this file.
 
@@ -144,6 +151,15 @@ _MARIAN_MODELS = {
 _LANGID_MAX_CHARS = _env_int("HABITHON_LANGID_MAX_CHARS", 5000)
 _LANGID_MIN_CHARS = _env_int("HABITHON_LANGID_MIN_CHARS", 50)
 
+# Routing thresholds (detection, probe, validation)
+_ROUTING_TAU_LOW = float(_env("HABITHON_ROUTING_TAU_LOW", 0.70) or 0.70)
+_ROUTING_DELTA_CLOSE = float(_env("HABITHON_ROUTING_DELTA_CLOSE", 0.05) or 0.05)
+_ROUTING_TAU_EN = float(_env("HABITHON_ROUTING_TAU_EN", 0.90) or 0.90)
+_ROUTING_SIM_NOOP = float(_env("HABITHON_ROUTING_SIM_NOOP", 0.92) or 0.92)
+_ROUTING_PROBE_K = _env_int("HABITHON_ROUTING_PROBE_K", 3)
+_ROUTING_PROBE_SLICE = _env_int("HABITHON_ROUTING_PROBE_SLICE_CHARS", 600)
+_ROUTING_MAX_RETRIES = _env_int("HABITHON_ROUTING_MAX_RETRIES", 3)
+
 
 # ---------------------------
 # Build the settings mapping (then deep-freeze)
@@ -204,6 +220,19 @@ _translation = {
         "model_path": _DEFAULT_LANGID_MODEL,
         "max_chars": _LANGID_MAX_CHARS,
         "min_chars": _LANGID_MIN_CHARS,
+        "candidates": ["sk", "de", "cs", "pl", "hu", "en"],
+    },
+    # 5b) Routing thresholds and probe/validation configuration (model-only policies)
+    "routing": {
+        "tau_low": _ROUTING_TAU_LOW,
+        "delta_close": _ROUTING_DELTA_CLOSE,
+        "tau_en": _ROUTING_TAU_EN,
+        "similarity_noop_threshold": _ROUTING_SIM_NOOP,
+        "probe": {
+            "k": _ROUTING_PROBE_K,
+            "slice_chars": _ROUTING_PROBE_SLICE,
+        },
+        "max_retries": _ROUTING_MAX_RETRIES,
         "candidates": ["sk", "de", "cs", "pl", "hu", "en"],
     },
     # 6) Glossary integration (optional)
@@ -387,6 +416,23 @@ def validate_translation_settings(cfg=None):
         issues.append("policy.network_access must be False for this project")
     if bool(cfg["policy"]["allow_online_model_download"]):
         issues.append("policy.allow_online_model_download must be False (offline only)")
+
+    # Routing sanity
+    routing = cfg.get("routing", {})
+    try:
+        if float(routing.get("tau_low", 0.70)) <= 0 or float(routing.get("tau_low", 0.70)) > 1:
+            issues.append("routing.tau_low must be in (0,1]")
+        if float(routing.get("delta_close", 0.05)) < 0:
+            issues.append("routing.delta_close must be >= 0")
+        if float(routing.get("tau_en", 0.90)) <= 0 or float(routing.get("tau_en", 0.90)) > 1:
+            issues.append("routing.tau_en must be in (0,1]")
+        if (
+            float(routing.get("similarity_noop_threshold", 0.92)) <= 0
+            or float(routing.get("similarity_noop_threshold", 0.92)) > 1
+        ):
+            issues.append("routing.similarity_noop_threshold must be in (0,1]")
+    except Exception:
+        issues.append("routing thresholds must be numeric")
 
     ok = len(issues) == 0
     if strict and not ok:

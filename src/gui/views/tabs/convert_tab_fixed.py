@@ -15,13 +15,14 @@ from ..qt import (
     QSpinBox,
     QComboBox,
     QLabel,
+    QToolButton,
 )
 
 from ...services.facade import GuiServices
 
 
 class ConvertTab(QWidget):
-    """Preprocessing tab: plan and run convert-only workflow."""
+    """Preprocessing tab: plan and run convert-only workflow with advanced routing."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -44,161 +45,201 @@ class ConvertTab(QWidget):
         form.addRow("Source folder:", row_src)
         form.addRow("Output folder:", row_out)
 
-        # Options (minimal subset)
+        # Options
         self.recurse_cb = QCheckBox("Recurse subfolders")
         self.recurse_cb.setChecked(True)
-        self.recurse_cb.setToolTip("If checked, scan source folder recursively.")
         self.overwrite_cb = QCheckBox("Overwrite existing")
         self.overwrite_cb.setChecked(False)
-        self.overwrite_cb.setToolTip(
-            "If checked, existing outputs will be overwritten. If unchecked, they are skipped."
-        )
-
         self.workers_sp = QSpinBox()
         self.workers_sp.setRange(1, 64)
         self.workers_sp.setValue(1)
-        self.workers_sp.setToolTip("Maximum parallel workers for Convert/Translate.")
         self.progress_mode = QComboBox()
         self.progress_mode.addItems(["auto", "plain", "none"])
-        self.progress_mode.setToolTip("Progress display style in logs.")
         self.log_level = QComboBox()
         self.log_level.addItems(["ERROR", "WARNING", "INFO", "DEBUG"])
-        self.log_level.setToolTip("Verbosity of logs written during operations.")
+
         form.addRow(self.recurse_cb)
         form.addRow(self.overwrite_cb)
         form.addRow("Workers:", self.workers_sp)
         form.addRow("Progress:", self.progress_mode)
         form.addRow("Log level:", self.log_level)
-
         vbox.addLayout(form)
 
-        # What to run (single Run button will honor these)
+        # What to run
         run_opts = QFormLayout()
         self.convert_cb = QCheckBox("Convert to Markdown")
         self.convert_cb.setChecked(True)
-        self.convert_cb.setToolTip(
-            "Perform document-to-Markdown conversion into the Output folder."
-        )
         self.translate_cb = QCheckBox("Translate to English")
         self.translate_cb.setChecked(False)
-        self.translate_cb.setToolTip("Create or refresh English variants of Markdown files.")
         run_opts.addRow(self.convert_cb)
         run_opts.addRow(self.translate_cb)
         vbox.addLayout(run_opts)
 
-        # Translation options (enabled only when Translate is selected)
+        # Translation options
         tr_form = QFormLayout()
+
+        # Basic translation controls
         self.make_en_cb = QCheckBox("Make English variant (.en.md)")
         self.make_en_cb.setChecked(False)
-        self.make_en_cb.setToolTip(
-            "If checked, creates/updates English-sidecar files. If unchecked, updates inline language where applicable."
+        tr_form.addRow(
+            self._create_label_with_help(
+                "English variant:",
+                "If checked, creates/updates English-sidecar files. If unchecked, updates inline language where applicable.",
+            ),
+            self.make_en_cb,
         )
-        self.translator_combo = QComboBox()
-        self.translator_combo.addItems(["auto", "marian_opus", "ct2_nllb"])  # auto -> None
-        self.translator_combo.setToolTip(
-            "Choose translation engine (auto selects the best available)."
-        )
-        tr_form.addRow(self.make_en_cb)
-        tr_form.addRow("Translator:", self.translator_combo)
 
-        # LangID controls for translation routing
+        self.translator_combo = QComboBox()
+        self.translator_combo.addItems(["auto", "marian_opus", "ct2_nllb"])
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Translator:",
+                "Choose translation engine. 'auto' selects the best available engine automatically.",
+            ),
+            self.translator_combo,
+        )
+
+        # Language Detection Settings
+        lang_label = QLabel("Language Detection Settings")
+        lang_label.setStyleSheet("font-weight: bold; color: #2c5aa0; margin-top: 10px;")
+        tr_form.addRow(lang_label)
+
         self.lang_cands = QLineEdit()
         self.lang_cands.setPlaceholderText("e.g. sk,cs,de,en")
-        self.lang_cands.setToolTip("Optional comma-separated detector candidates to bias routing.")
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Candidates:",
+                "Optional comma-separated list of language codes to limit detection to. Leave empty to detect from all supported languages.",
+            ),
+            self.lang_cands,
+        )
+
         self.lang_max_chars = QSpinBox()
         self.lang_max_chars.setRange(100, 50000)
         self.lang_max_chars.setValue(5000)
-        self.lang_max_chars.setToolTip("Max cleaned characters analyzed for language detection.")
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Max chars:",
+                "Maximum number of characters to analyze from each document. Larger values give more accurate results but take longer.",
+            ),
+            self.lang_max_chars,
+        )
+
         self.lang_min_chars = QSpinBox()
         self.lang_min_chars.setRange(10, 1000)
         self.lang_min_chars.setValue(50)
-        self.lang_min_chars.setToolTip("Minimum characters before trusting detector scores.")
-        tr_form.addRow(QLabel("LangID candidates:"), self.lang_cands)
-        tr_form.addRow(QLabel("LangID max chars:"), self.lang_max_chars)
-        tr_form.addRow(QLabel("LangID min chars:"), self.lang_min_chars)
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Min chars:",
+                "Minimum number of characters required before trusting detection results. Very short texts are unreliable.",
+            ),
+            self.lang_min_chars,
+        )
 
-        # Advanced routing controls (new)
-        routing_group = QFormLayout()
+        # Advanced Routing Controls
         routing_label = QLabel("Advanced Routing (Model-Only)")
-        routing_label.setStyleSheet("font-weight: bold; color: #2c5aa0;")
+        routing_label.setStyleSheet("font-weight: bold; color: #2c5aa0; margin-top: 10px;")
         tr_form.addRow(routing_label)
 
         self.enable_routing_cb = QCheckBox("Enable advanced routing")
         self.enable_routing_cb.setChecked(True)
-        self.enable_routing_cb.setToolTip(
-            "Use model-only routing with probe selection, validation, and retry logic"
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Advanced routing:",
+                "Use model-only routing with intelligent probe selection, quality validation, and deterministic retry logic for better translation accuracy.",
+            ),
+            self.enable_routing_cb,
         )
 
-        # Threshold controls
+        # Routing threshold controls
         self.tau_low = QSpinBox()
         self.tau_low.setRange(1, 100)
         self.tau_low.setValue(70)
         self.tau_low.setSuffix("%")
-        self.tau_low.setToolTip(
-            "Low confidence threshold - triggers probe when LangID confidence below this"
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Low confidence (τ_low):",
+                "Confidence threshold below which the system considers language detection unreliable and triggers probe analysis to find the best source language.",
+            ),
+            self.tau_low,
         )
 
         self.delta_close = QSpinBox()
         self.delta_close.setRange(1, 20)
         self.delta_close.setValue(5)
         self.delta_close.setSuffix("%")
-        self.delta_close.setToolTip(
-            "Close margin threshold - triggers probe when top-2 languages within this margin"
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Close margin (δ_close):",
+                "When the top two language candidates have scores within this margin, the detection is considered ambiguous and triggers probe analysis.",
+            ),
+            self.delta_close,
         )
 
         self.tau_en = QSpinBox()
         self.tau_en.setRange(1, 100)
         self.tau_en.setValue(90)
         self.tau_en.setSuffix("%")
-        self.tau_en.setToolTip(
-            "English confidence threshold - translation output must meet this to pass validation"
+        tr_form.addRow(
+            self._create_label_with_help(
+                "English threshold (τ_en):",
+                "Minimum English confidence required for translation outputs to pass quality validation. Outputs below this threshold trigger retries.",
+            ),
+            self.tau_en,
         )
 
         self.similarity_noop = QSpinBox()
         self.similarity_noop.setRange(1, 100)
         self.similarity_noop.setValue(92)
         self.similarity_noop.setSuffix("%")
-        self.similarity_noop.setToolTip(
-            "Near-identity threshold - reject translations too similar to input"
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Near-identity threshold:",
+                "Maximum similarity allowed between source and translation. Higher similarity suggests poor translation or identity copying.",
+            ),
+            self.similarity_noop,
         )
 
-        # Probe controls
+        # Probe and retry controls
         self.probe_k = QSpinBox()
         self.probe_k.setRange(1, 10)
         self.probe_k.setValue(3)
-        self.probe_k.setToolTip("Number of candidate languages to test in probe phase")
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Probe candidates:",
+                "Number of top language candidates to test with micro-translation probes when detection is ambiguous.",
+            ),
+            self.probe_k,
+        )
 
         self.probe_slice = QSpinBox()
         self.probe_slice.setRange(100, 2000)
         self.probe_slice.setValue(600)
-        self.probe_slice.setToolTip("Character count for micro-translation probe samples")
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Probe slice chars:",
+                "Number of characters to use for micro-translation quality tests during probe analysis.",
+            ),
+            self.probe_slice,
+        )
 
         self.max_retries = QSpinBox()
         self.max_retries.setRange(1, 10)
         self.max_retries.setValue(3)
-        self.max_retries.setToolTip("Maximum retry attempts across engines and source languages")
-
-        tr_form.addRow(self.enable_routing_cb)
-        tr_form.addRow("Low confidence (τ_low):", self.tau_low)
-        tr_form.addRow("Close margin (δ_close):", self.delta_close)
-        tr_form.addRow("English threshold (τ_en):", self.tau_en)
-        tr_form.addRow("Similarity threshold:", self.similarity_noop)
-        tr_form.addRow("Probe candidates:", self.probe_k)
-        tr_form.addRow("Probe slice chars:", self.probe_slice)
-        tr_form.addRow("Max retries:", self.max_retries)
+        tr_form.addRow(
+            self._create_label_with_help(
+                "Max retries:",
+                "Maximum number of retry attempts across different engines and source languages before marking a document as failed.",
+            ),
+            self.max_retries,
+        )
 
         vbox.addLayout(tr_form)
 
-        # Actions (single Run + optional Plan)
+        # Actions
         actions = QHBoxLayout()
         self.plan_btn = QPushButton("Plan")
-        self.plan_btn.setToolTip(
-            "Dry-run for Convert: list what would be converted without writing files."
-        )
         self.run_btn = QPushButton("Run")
-        self.run_btn.setToolTip(
-            "Run selected actions in order: Convert (if checked) then Translate (if checked)."
-        )
         actions.addWidget(self.plan_btn)
         actions.addWidget(self.run_btn)
         actions.addStretch(1)
@@ -218,13 +259,47 @@ class ConvertTab(QWidget):
         self.convert_cb.toggled.connect(self._update_enabled_states)
         self.enable_routing_cb.toggled.connect(self._update_enabled_states)
 
-        # Initialize enabled/disabled state
         self._update_enabled_states()
 
-    # --- Helpers ---
+    def _create_label_with_help(self, text: str, tooltip: str) -> QWidget:
+        """Create a label with a help button that shows tooltip on hover."""
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
+
+        label = QLabel(text)
+        help_btn = QToolButton()
+        help_btn.setText("?")
+        help_btn.setToolTip(tooltip)
+        help_btn.setStyleSheet(
+            """
+            QToolButton {
+                background-color: #E3F2FD;
+                border: 1px solid #2196F3;
+                border-radius: 10px;
+                color: #1976D2;
+                font-weight: bold;
+                font-size: 10px;
+                min-width: 16px;
+                max-width: 16px;
+                min-height: 16px;
+                max-height: 16px;
+            }
+            QToolButton:hover {
+                background-color: #2196F3;
+                color: white;
+            }
+        """
+        )
+
+        layout.addWidget(label)
+        layout.addWidget(help_btn)
+        layout.addStretch(1)
+
+        return container
 
     def _update_enabled_states(self) -> None:
-        # Translation options enabled only if translate is selected
         tr_enabled = self.translate_cb.isChecked()
         self.make_en_cb.setEnabled(tr_enabled)
         self.translator_combo.setEnabled(tr_enabled)
@@ -232,7 +307,6 @@ class ConvertTab(QWidget):
         self.lang_max_chars.setEnabled(tr_enabled)
         self.lang_min_chars.setEnabled(tr_enabled)
 
-        # Advanced routing controls enabled when translation is selected
         self.enable_routing_cb.setEnabled(tr_enabled)
         routing_enabled = tr_enabled and self.enable_routing_cb.isChecked()
         self.tau_low.setEnabled(routing_enabled)
@@ -243,16 +317,7 @@ class ConvertTab(QWidget):
         self.probe_slice.setEnabled(routing_enabled)
         self.max_retries.setEnabled(routing_enabled)
 
-        # Plan is meaningful only when Convert is selected
         self.plan_btn.setEnabled(self.convert_cb.isChecked())
-        # Run tooltip reflects current selection
-        acts: list[str] = []
-        if self.convert_cb.isChecked():
-            acts.append("Convert")
-        if self.translate_cb.isChecked():
-            acts.append("Translate")
-        what = ", then ".join(acts) if len(acts) == 2 else (acts[0] if acts else "nothing")
-        self.run_btn.setToolTip(f"Run: {what}.")
 
     def _browse_src(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Select source folder")
@@ -265,7 +330,6 @@ class ConvertTab(QWidget):
             self.out_edit.setText(d)
 
     def _cfg(self) -> Mapping[str, Any]:
-        # Build optional LangID section when any field is set
         cands_raw = self.lang_cands.text().strip()
         cands = [s.strip().lower() for s in cands_raw.split(",") if s.strip()] if cands_raw else []
         langid_cfg: dict[str, Any] = {}
@@ -278,13 +342,25 @@ class ConvertTab(QWidget):
         if mn:
             langid_cfg["min_chars"] = mn
 
+        # Build routing configuration when enabled
+        routing_cfg: dict[str, Any] = {}
+        if self.translate_cb.isChecked() and self.enable_routing_cb.isChecked():
+            routing_cfg = {
+                "tau_low": float(self.tau_low.value()) / 100.0,
+                "delta_close": float(self.delta_close.value()) / 100.0,
+                "tau_en": float(self.tau_en.value()) / 100.0,
+                "similarity_noop_threshold": float(self.similarity_noop.value()) / 100.0,
+                "probe": {
+                    "k": int(self.probe_k.value()),
+                    "slice_chars": int(self.probe_slice.value()),
+                },
+                "max_retries": int(self.max_retries.value()),
+            }
+
         cfg: dict[str, Any] = {
             "src": self.src_edit.text().strip(),
             "out": self.out_edit.text().strip(),
-            "scan": {
-                "recurse": self.recurse_cb.isChecked(),
-                # Let app layer default include_ext and exclude_glob
-            },
+            "scan": {"recurse": self.recurse_cb.isChecked()},
             "write": {
                 "overwrite": self.overwrite_cb.isChecked(),
                 "assets_subdir": "assets",
@@ -300,14 +376,14 @@ class ConvertTab(QWidget):
             "ui": {
                 "log_level": self.log_level.currentText(),
                 "progress": self.progress_mode.currentText(),
-                # Optional: still pass locale as log hint
                 "locale": None,
             },
             "report": None,
         }
         if self.translate_cb.isChecked():
-            # Attach langid preferences only when translate is requested
             cfg["langid"] = langid_cfg
+            if routing_cfg:
+                cfg["routing"] = routing_cfg
         return cfg
 
     def _on_plan(self) -> None:
@@ -329,11 +405,8 @@ class ConvertTab(QWidget):
             self.output.setPlainText(f"Plan failed: {e}")
 
     def _on_run_combined(self) -> None:
-        actions_taken: list[str] = []
         try:
             cfg = dict(self._cfg())
-
-            # Validate basic inputs
             if not cfg.get("src") or not cfg.get("out"):
                 self.output.setPlainText("Please select Source and Output folders.")
                 return
@@ -343,22 +416,17 @@ class ConvertTab(QWidget):
 
             lines: list[str] = []
 
-            # 1) Convert
             if self.convert_cb.isChecked():
                 res = self.svc.convert_run(cfg)
-                actions_taken.append("convert")
                 lines += [
                     "Convert finished:",
                     f"  matched={res.get('matched')} ok={res.get('converted_ok')} skip={res.get('skipped_existing')} failed={res.get('failed')}",
-                    f"  started_at={res.get('started_at')} ended_at={res.get('ended_at')}",
                     "",
                 ]
 
-            # 2) Translate
             if self.translate_cb.isChecked():
                 engine = self.translator_combo.currentText().strip()
                 engine_opt = None if engine == "auto" else engine
-                # translate_only is implied by whether Convert ran
                 translate_only = not self.convert_cb.isChecked()
                 make_en = self.make_en_cb.isChecked()
                 tres = self.svc.translate_run(
@@ -367,7 +435,6 @@ class ConvertTab(QWidget):
                     translate_only=translate_only,
                     translator=engine_opt,
                 )
-                actions_taken.append("translate")
                 code = tres.get("code")
                 report = tres.get("report") or {}
                 tr = report.get("translation") if isinstance(report, dict) else None
@@ -383,9 +450,6 @@ class ConvertTab(QWidget):
                 if rp:
                     lines.append(f"  report={rp}")
 
-            if actions_taken:
-                self.output.setPlainText("\n".join(lines))
-            else:
-                self.output.setPlainText("No actions executed.")
+            self.output.setPlainText("\n".join(lines))
         except Exception as e:
             self.output.setPlainText(f"Run failed: {e}")

@@ -22,12 +22,14 @@ try:  # pragma: no cover - import-time capability check
         QHBoxLayout as _QHBoxLayout,
         QLineEdit as _QLineEdit,
         QPushButton as _QPushButton,
+        QToolButton as _QToolButton,
         QFileDialog as _QFileDialog,
         QCheckBox as _QCheckBox,
         QTextEdit as _QTextEdit,
         QSpinBox as _QSpinBox,
         QComboBox as _QComboBox,
         QLabel as _QLabel,
+        QStyle as _QStyle,
     )
 
     QT_AVAILABLE = True
@@ -41,12 +43,14 @@ try:  # pragma: no cover - import-time capability check
     QHBoxLayout = _QHBoxLayout
     QLineEdit = _QLineEdit
     QPushButton = _QPushButton
+    QToolButton = _QToolButton
     QFileDialog = _QFileDialog
     QCheckBox = _QCheckBox
     QTextEdit = _QTextEdit
     QSpinBox = _QSpinBox
     QComboBox = _QComboBox
     QLabel = _QLabel
+    QStyle = _QStyle
 
 except Exception:  # pragma: no cover - stub fallback
     QT_AVAILABLE = False
@@ -65,6 +69,12 @@ except Exception:  # pragma: no cover - stub fallback
         def setToolTip(self, *args, **kwargs):
             pass
 
+        def setEnabled(self, *args, **kwargs):
+            pass
+
+        def setStyleSheet(self, *args, **kwargs):
+            pass
+
     class _Layout:
         def __init__(self, *args, **kwargs):
             pass
@@ -79,6 +89,12 @@ except Exception:  # pragma: no cover - stub fallback
             pass
 
         def addStretch(self, *args, **kwargs):
+            pass
+
+        def setContentsMargins(self, *args, **kwargs):
+            pass
+
+        def setSpacing(self, *args, **kwargs):
             pass
 
     class Qt(_QtStub):
@@ -152,6 +168,13 @@ except Exception:  # pragma: no cover - stub fallback
         def __init__(self, *args, **kwargs):
             self.clicked = _Signal()
 
+    class QToolButton(_Widget):
+        def __init__(self, *args, **kwargs):
+            self.clicked = _Signal()
+
+        def setText(self, *args, **kwargs):
+            pass
+
     class QFileDialog:
         @staticmethod
         def getExistingDirectory(*args, **kwargs) -> str:
@@ -163,6 +186,9 @@ except Exception:  # pragma: no cover - stub fallback
             return ("", "")
 
     class QCheckBox(_Widget):
+        def __init__(self, *args, **kwargs):
+            self.toggled = _Signal()
+
         def setChecked(self, *args, **kwargs):
             pass
 
@@ -182,11 +208,17 @@ except Exception:  # pragma: no cover - stub fallback
         def setPlaceholderText(self, *args, **kwargs):
             pass
 
+        def setMinimumHeight(self, *args, **kwargs):
+            pass
+
     class QSpinBox(_Widget):
         def setRange(self, *args, **kwargs):
             pass
 
         def setValue(self, *args, **kwargs):
+            pass
+
+        def setSuffix(self, *args, **kwargs):
             pass
 
         def value(self) -> int:
@@ -202,6 +234,19 @@ except Exception:  # pragma: no cover - stub fallback
         def currentText(self) -> str:
             return ""
 
+        def setCurrentText(self, *args, **kwargs):
+            pass
+
     class QLabel(_Widget):
         def __init__(self, *args, **kwargs):
             pass
+
+        def setText(self, *args, **kwargs):
+            pass
+
+        def setStyleSheet(self, *args, **kwargs):
+            pass
+
+    class QStyle:
+        # Minimal stub to satisfy imports
+        pass

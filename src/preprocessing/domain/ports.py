@@ -859,3 +859,82 @@ class CachePort(Protocol):
             CacheError: On cache write failure.
         """
         ...
+
+
+# ---------------------------------------------
+# New ports and types for top-k language detection, English detection, and text similarity
+# ---------------------------------------------
+
+
+class LanguageDetectTopKCandidate(TypedDict):
+    code: str
+    score: float
+
+
+class LanguageDetectTopKResult(TypedDict, total=False):
+    """Rich result for language detection using model-only signals.
+
+    Keys:
+        lang_code: Selected source language code (lowercase ISO-like).
+        confidence: Calibrated confidence in [0,1] for the selected language.
+        topk: List of {code, score} pairs from the underlying model (raw scores as returned by the model).
+        flags: {"short_text": bool, "low_confidence": bool, "close_top2": bool}
+        used_candidates: Optional list of candidate language codes considered.
+    """
+
+    lang_code: str
+    confidence: float
+    topk: list[LanguageDetectTopKCandidate]
+    flags: dict[str, bool]
+    used_candidates: list[str]
+
+
+class LanguageDetectTopKPort(Protocol):
+    """Model-only top-k language detector with calibrated confidence and flags.
+
+    Deterministic: Identical input and configuration yields identical output.
+    """
+
+    def detect_topk(
+        self,
+        text: str,
+        *,
+        k: int = 5,
+        hints: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> LanguageDetectTopKResult:
+        """Return a rich top-k detection result without heuristics.
+
+        Args:
+            text: Markdown/plain text to analyze.
+            k: Max number of candidates to return (model top-k).
+            hints: Optional hints; may include {"candidates": [..]}.
+            context: Optional telemetry context.
+        """
+        ...
+
+
+class EnglishDetectPort(Protocol):
+    """Model-only Englishness detector for validation and probing.
+
+    Contract:
+        - english_confidence returns calibrated float in [0,1].
+        - Deterministic and offline; no heuristics.
+    """
+
+    def english_confidence(self, text: str) -> float:
+        """Return probability/confidence that text is English in [0,1]."""
+        ...
+
+
+class SimilarityPort(Protocol):
+    """Deterministic similarity scorer for two strings.
+
+    The score must be in [0,1], where 1 means identical and 0 means completely
+    dissimilar according to the chosen metric. Implementations must be
+    deterministic and must not rely on online resources.
+    """
+
+    def similarity(self, a: str, b: str) -> float:
+        """Return a similarity score in [0,1] with 1.0 == identical."""
+        ...

@@ -68,11 +68,13 @@ Errors
 import os
 import re
 import threading
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from preprocessing.domain.ports import LanguageDetectError
+from preprocessing.domain.ports import LanguageDetectTopKResult
 
 _Label = str
 _Code = str
@@ -256,7 +258,7 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
             1. Normalize/clean Markdown per configuration by removing code blocks, inline code,
                raw HTML, URLs/emails, and keeping human text such as headings and link labels.
             2. Sample deterministically (head + tail) if cleaned length exceeds max_chars.
-            3. If cleaned length < min_chars, return a best-effort guess with low confidence floor.
+            3. If cleaned length < min_chars, return a best-effort language with a low confidence floor.
             4. Predict with fastText, map label to lowercase ISO-like code, and apply candidate
                constraints (hints/config). If the top prediction is outside candidates, prefer the
                best-scoring candidate if available; otherwise penalize confidence.
@@ -274,6 +276,8 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
             "chars_in": len(text or ""),
             "chars_used": 0,
             "had_code_blocks": False,
+            "sanitized_changed": False,
+            "sanitized_removed": 0,
             "confidence": 0.0,
         }
 
@@ -289,9 +293,14 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
         sampled = self._sample_cleaned(cleaned, self._max_chars)
         stats["chars_used"] = len(sampled)
 
-        # Short/noisy guard rail
-        if len(sampled) < self._min_chars:
-            guess = self._best_effort_guess(sampled, hints)
+        # Sanitize potentially problematic control/surrogate characters
+        sanitized, changed, removed = self._sanitize_text(sampled)
+        stats["sanitized_changed"] = changed
+        stats["sanitized_removed"] = removed
+
+        # Short/noisy guard rail: return fallback without heuristics
+        if len(sanitized) < self._min_chars:
+            guess = self._fallback_guess(hints)
             conf = max(self._calibration.min_confidence_report, 0.0)
             stats["confidence"] = conf
             self._last_stats = stats
@@ -300,13 +309,17 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
         # Prediction
         try:
             # Request top-k to allow candidate re-ranking; small k for speed
-            labels, scores = self._predict(sampled, top_k=5)
+            labels, scores = self._predict(sanitized, top_k=5)
         except LanguageDetectError:
             raise
         except Exception as e:  # pragma: no cover - depends on vendor runtime
             raise LanguageDetectError(
                 "PREDICT_FAILED",
-                details={"message": "fastText predict failed", "exc_type": type(e).__name__},
+                details={
+                    "message": "fastText predict failed",
+                    "exc_type": type(e).__name__,
+                    "exc_msg": str(e),
+                },
             )
 
         # Convert labels to codes and pair with scores
@@ -319,9 +332,9 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
                 continue
             ranked.append((code, float(sc)))
         if not ranked:
-            # Fallback: avoid raising for empty mapping
-            guess = self._best_effort_guess(sampled, hints)
-            conf = self._calibrate(0.0, len(sampled), within_candidates=False)
+            # Fallback: avoid raising for empty mapping (no heuristics)
+            guess = self._fallback_guess(hints)
+            conf = self._calibrate(0.0, len(sanitized), within_candidates=False)
             stats["confidence"] = conf
             self._last_stats = stats
             return guess, conf
@@ -341,7 +354,7 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
                 within_candidates = False
 
         # Final confidence with calibration
-        confidence = self._calibrate(raw_score, len(sampled), within_candidates=within_candidates)
+        confidence = self._calibrate(raw_score, len(sanitized), within_candidates=within_candidates)
         stats["confidence"] = confidence
         self._last_stats = stats
         return chosen_code, confidence
@@ -527,12 +540,55 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
         except Exception as e:  # pragma: no cover - vendor specific
             raise LanguageDetectError(
                 "PREDICT_FAILED",
-                details={"message": "fastText predict exception", "exc_type": type(e).__name__},
+                details={
+                    "message": "fastText predict exception",
+                    "exc_type": type(e).__name__,
+                    "exc_msg": str(e),
+                },
             )
-        # fastText may return numpy arrays; ensure Python lists
-        lbls = [str(x) for x in (labels or [])]
-        scs = [float(x) for x in (scores or [])]
+
+        # fastText may return numpy arrays; ensure Python lists without triggering array truthiness
+        def _as_list(x):
+            if x is None:
+                return []
+            try:
+                return list(x.tolist()) if hasattr(x, "tolist") else list(x)
+            except Exception:
+                # Fallback: wrap scalar
+                return [x]
+
+        lbls_raw = _as_list(labels)
+        scs_raw = _as_list(scores)
+        lbls = [str(x) for x in lbls_raw]
+        scs = [float(x) for x in scs_raw]
         return lbls, scs
+
+    def _sanitize_text(self, s: str) -> tuple[str, bool, int]:
+        """Remove control and surrogate characters that may break fastText bindings.
+
+        Returns the sanitized string, a change flag, and count of removed/replaced chars.
+        """
+        if not s:
+            return s, False, 0
+        orig = s
+        # Normalize to NFC
+        s = unicodedata.normalize("NFC", s)
+        # Remove characters in Unicode category starting with 'C' (Other: Cc, Cf, Cs, Co, Cn)
+        removed = 0
+        out_chars: list[str] = []
+        for ch in s:
+            cat = unicodedata.category(ch)
+            if cat and cat[0] == "C":
+                removed += 1
+                # replace with space to keep word boundaries reasonable
+                out_chars.append(" ")
+            else:
+                out_chars.append(ch)
+        s = "".join(out_chars)
+        # Collapse whitespace again if enabled
+        if self._collapse_ws:
+            s = self._RE_WS.sub(" ", s).strip()
+        return (s, s != orig, removed)
 
     def _map_label(self, label: _Label) -> _Code:
         """Map a fastText label (e.g., "__label__sk") to a lowercase ISO-like code.
@@ -599,38 +655,103 @@ class FastTextLangId:  # no direct inheritance from Protocol to avoid strict sig
         conf = max(self._calibration.min_confidence_report, min(1.0, conf))
         return conf
 
-    def _best_effort_guess(self, cleaned: str, hints: dict[str, Any] | None) -> str:
-        """Guess a reasonable language when text is too short/noisy.
-
-        Priority:
-            1. First hint candidate if provided.
-            2. Simple diacritic heuristics for a few languages of interest.
-            3. Default to "en".
-        """
-        # 1) Hints
+    def _fallback_guess(self, hints: dict[str, Any] | None) -> str:
+        """Return a guess without heuristic rules: prefer hint candidates, else 'en'."""
         if hints and hints.get("candidates"):
             cands = [str(c).lower() for c in hints["candidates"] or []]
             if cands:
                 return cands[0]
-        s = cleaned or ""
-        # 2) Heuristics by character set
-        if re.search(r"[äöüß]", s):
-            return "de"
-        if re.search(r"[áäéíóôúýčďľňŕšťž]", s, flags=re.IGNORECASE):  # sk/cs diacritics
-            # If candidates restrict to cs vs sk, prefer if present
-            if hints and hints.get("candidates"):
-                cset = {c.lower() for c in hints["candidates"]}
-                if "sk" in cset:
-                    return "sk"
-                if "cs" in cset:
-                    return "cs"
-            return "sk"
-        if re.search(r"[ąćęłńóśźż]", s, flags=re.IGNORECASE):
-            return "pl"
-        if re.search(r"[őű]", s, flags=re.IGNORECASE):
-            return "hu"
-        # 3) Default
         return "en"
+
+    def detect_topk(
+        self,
+        text: str,
+        *,
+        k: int = 5,
+        hints: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> LanguageDetectTopKResult:
+        """Return top-k candidates and calibrated selection without heuristics."""
+        # Ensure model
+        if not self._loaded or self._model is None:
+            self.load()
+
+        cleaned, _ = self._preprocess_md(text)
+        sampled = self._sample_cleaned(cleaned, self._max_chars)
+        sanitized, _changed, _removed = self._sanitize_text(sampled)
+        short = len(sanitized) < self._min_chars
+        # Store minimal stats for diagnostics
+        self._last_stats = {
+            "chars_in": len(text or ""),
+            "chars_used": len(sampled),
+            "sanitized_changed": _changed,
+            "sanitized_removed": _removed,
+        }
+
+        # If too short: return empty topk and a fallback selection with low confidence
+        if short:
+            guess = self._fallback_guess(hints)
+            if isinstance(self._last_stats, dict):
+                self._last_stats["confidence"] = self._calibration.min_confidence_report
+            return {
+                "lang_code": guess,
+                "confidence": self._calibration.min_confidence_report,
+                "topk": [],
+                "flags": {"short_text": True, "low_confidence": True, "close_top2": False},
+                "used_candidates": [c.lower() for c in (hints or {}).get("candidates", [])],
+            }
+
+        labels, scores = self._predict(sanitized, top_k=max(1, int(k)))
+        ranked: list[tuple[str, float]] = []
+        for lab, sc in zip(labels, scores):
+            code = self._map_label(lab)
+            if not code or code in self._blacklist_cfg:
+                continue
+            ranked.append((code, float(sc)))
+        if not ranked:
+            guess = self._fallback_guess(hints)
+            if isinstance(self._last_stats, dict):
+                self._last_stats["confidence"] = float(self._calibration.min_confidence_report)
+            return {
+                "lang_code": guess,
+                "confidence": self._calibrate(0.0, len(sanitized), within_candidates=False),
+                "topk": [],
+                "flags": {"short_text": False, "low_confidence": True, "close_top2": False},
+                "used_candidates": [c.lower() for c in (hints or {}).get("candidates", [])],
+            }
+
+        # Apply candidates constraint
+        hint_candidates = [c.lower() for c in (hints or {}).get("candidates", [])] if hints else []
+        all_candidates = self._merge_candidates(hint_candidates)
+        chosen_code, raw_score = ranked[0]
+        within_candidates = True
+        if all_candidates:
+            cand_ranked = [(c, s) for (c, s) in ranked if c in all_candidates]
+            if cand_ranked:
+                chosen_code, raw_score = cand_ranked[0]
+            else:
+                within_candidates = False
+
+        confidence = self._calibrate(raw_score, len(sanitized), within_candidates=within_candidates)
+        if isinstance(self._last_stats, dict):
+            self._last_stats["confidence"] = float(confidence)
+        top_list = [{"code": c, "score": s} for c, s in ranked[: max(1, int(k))]]
+        # Compute a simple closeness indicator for top-2
+        close_top2 = False
+        if len(ranked) >= 2:
+            close_top2 = abs(ranked[0][1] - ranked[1][1]) < 0.05
+
+        return {
+            "lang_code": chosen_code,
+            "confidence": confidence,
+            "topk": top_list,
+            "flags": {
+                "short_text": False,
+                "low_confidence": confidence < 0.5,
+                "close_top2": close_top2,
+            },
+            "used_candidates": list(all_candidates) if all_candidates else [],
+        }
 
 
 __all__ = ["FastTextLangId"]

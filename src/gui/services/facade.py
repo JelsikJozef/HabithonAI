@@ -15,6 +15,28 @@ from anonymization.app.pseudonymize import pseudonymize
 from anonymization.app.denomize import deanonymize
 
 
+# --- Small utility: write JSON diagnostics to outputs/logs ---
+def _write_langid_log(payload: dict[str, Any]) -> str:
+    import os, json
+    from datetime import datetime as _dt
+
+    logs_dir = os.path.join(os.getcwd(), "outputs", "logs")
+    try:
+        os.makedirs(logs_dir, exist_ok=True)
+    except Exception:
+        # Best-effort: if mkdir fails, write next to CWD
+        logs_dir = os.getcwd()
+    ts = _dt.now().strftime("%Y%m%d_%H%M%S_%f")
+    path = os.path.join(logs_dir, f"gui_lang_detect_{ts}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        # Swallow logging errors silently; return intended path for reference
+        pass
+    return path
+
+
 def _to_dict(obj: Any) -> Any:
     if is_dataclass(obj):
         return asdict(obj)
@@ -99,6 +121,59 @@ class GuiServices:
         if isinstance(mn, int) and mn > 0:
             argv += ["--lang-min-chars", str(mn)]
 
+        # Advanced routing overrides from cfg (new)
+        routing = dict(cfg.get("routing", {})) if isinstance(cfg.get("routing"), Mapping) else {}
+        if routing:
+            # Add routing environment variables to pass settings to the CLI
+            import os
+
+            original_env = {}
+
+            # Set routing environment variables
+            tau_low = routing.get("tau_low")
+            if isinstance(tau_low, (int, float)):
+                key = "HABITHON_ROUTING_TAU_LOW"
+                original_env[key] = os.environ.get(key)
+                os.environ[key] = str(float(tau_low))
+
+            delta_close = routing.get("delta_close")
+            if isinstance(delta_close, (int, float)):
+                key = "HABITHON_ROUTING_DELTA_CLOSE"
+                original_env[key] = os.environ.get(key)
+                os.environ[key] = str(float(delta_close))
+
+            tau_en = routing.get("tau_en")
+            if isinstance(tau_en, (int, float)):
+                key = "HABITHON_ROUTING_TAU_EN"
+                original_env[key] = os.environ.get(key)
+                os.environ[key] = str(float(tau_en))
+
+            similarity_noop = routing.get("similarity_noop_threshold")
+            if isinstance(similarity_noop, (int, float)):
+                key = "HABITHON_ROUTING_SIM_NOOP"
+                original_env[key] = os.environ.get(key)
+                os.environ[key] = str(float(similarity_noop))
+
+            probe = routing.get("probe", {})
+            if isinstance(probe, dict):
+                probe_k = probe.get("k")
+                if isinstance(probe_k, int):
+                    key = "HABITHON_ROUTING_PROBE_K"
+                    original_env[key] = os.environ.get(key)
+                    os.environ[key] = str(int(probe_k))
+
+                probe_slice = probe.get("slice_chars")
+                if isinstance(probe_slice, int):
+                    key = "HABITHON_ROUTING_PROBE_SLICE_CHARS"
+                    original_env[key] = os.environ.get(key)
+                    os.environ[key] = str(int(probe_slice))
+
+            max_retries = routing.get("max_retries")
+            if isinstance(max_retries, int):
+                key = "HABITHON_ROUTING_MAX_RETRIES"
+                original_env[key] = os.environ.get(key)
+                os.environ[key] = str(int(max_retries))
+
         # Optional report: use outputs/logs/cli_run.json under CWD
         import json, os
         from datetime import datetime as _dt
@@ -111,7 +186,17 @@ class GuiServices:
         )
         argv += ["--report", report_path]
 
-        code = _cli.main(argv)
+        # Execute CLI with routing environment variables set
+        try:
+            code = _cli.main(argv)
+        finally:
+            # Restore original environment variables
+            if routing:
+                for key, original_value in original_env.items():
+                    if original_value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = original_value
 
         payload: dict[str, Any] | None = None
         try:
@@ -122,7 +207,7 @@ class GuiServices:
 
         return {"code": int(code), "report": payload, "report_path": report_path}
 
-    # --- Language detection (new) ---
+    # --- Language detection (enhanced) ---
     def lang_detect_file(
         self,
         file_path: str,
@@ -135,104 +220,91 @@ class GuiServices:
 
         Behavior:
             - Converts non-Markdown inputs to Markdown in-memory using existing adapters.
-            - Uses FastText LID (lid.176.bin) with the same defaults as the pipeline,
-              with a deterministic heuristic fallback when FastText is unavailable.
+            - Uses FastText LID (lid.176.bin) with the same defaults as the pipeline.
 
         Returns:
             dict with keys: {"path", "lang", "confidence", "engine", "chars_used"}.
         """
-        import os
         from pathlib import Path
         from datetime import datetime as _dt
-        from typing import Any as _Any
+        import os, sys, platform
+
+        # Prepare diagnostics
+        diag: dict[str, Any] = {
+            "started": _dt.now().astimezone().isoformat(),
+            "mode": "basic",
+            "file": str(file_path),
+        }
 
         # 1) Load settings and detector (same as CLI)
         try:
             from preprocessing import settings_translation as st  # type: ignore
             from preprocessing.adapters.langid.fasttext_langid import FastTextLangId  # type: ignore
-            from preprocessing.domain.ports import LanguageDetectError as _LangDetectErr  # type: ignore
+            from preprocessing.domain.errors import DomainError  # type: ignore
         except Exception as e:
-            return {"error": f"Language detector unavailable: {e}"}
+            diag["error"] = {"stage": "import", "exc": repr(e)}
+            log_path = _write_langid_log(diag)
+            return {"error": f"Language detector unavailable: {e} (see {log_path})"}
 
         langid_cfg = dict(st.TRANSLATION.get("langid", {}))
         model_path = str(langid_cfg.get("model_path"))
-        # Override candidates if provided
+        model_abs = os.path.abspath(model_path)
         cfg_candidates = [c.lower() for c in (candidates or langid_cfg.get("candidates", []))]
-        # Apply optional window overrides
         if isinstance(max_chars, int) and max_chars > 0:
             langid_cfg["max_chars"] = int(max_chars)
         if isinstance(min_chars, int) and min_chars > 0:
             langid_cfg["min_chars"] = int(min_chars)
 
-        _ft = FastTextLangId(
+        diag["config"] = {
+            "model_path": model_path,
+            "model_abspath": model_abs,
+            "max_chars": int(langid_cfg.get("max_chars", 5000) or 5000),
+            "min_chars": int(langid_cfg.get("min_chars", 50) or 50),
+            "candidates": list(cfg_candidates or []),
+        }
+        diag["env"] = {
+            "python": sys.version,
+            "platform": platform.platform(),
+        }
+        try:
+            import fasttext as _ft  # type: ignore
+
+            diag["fasttext"] = {
+                "available": True,
+                "version": getattr(_ft, "__version__", "unknown"),
+            }
+        except Exception as e:
+            diag["fasttext"] = {"available": False, "import_exc": e.__class__.__name__}
+
+        _ftdet = FastTextLangId(
             model_path,
             max_chars=int(langid_cfg.get("max_chars", 5000) or 5000),
             min_chars=int(langid_cfg.get("min_chars", 50) or 50),
             candidates=list(cfg_candidates or []),
         )
 
-        class _HeuristicLangId:
-            def detect(
-                self,
-                text: str,
-                hints: dict[str, _Any] | None = None,
-                *,
-                context: dict[str, _Any] | None = None,
-            ) -> tuple[str, float]:
-                s = (text or "")[: max(0, int(langid_cfg.get("max_chars", 5000)))].lower()
-                if any(tok in s for tok in [" der ", " die ", " und ", " ist ", " nicht "]):
-                    return "de", 0.80
-                if any(tok in s for tok in [" a je ", " že ", " nie ", " pre ", " ktoré "]):
-                    return "sk", 0.75
-                if any(tok in s for tok in [" a je ", " že ", " není ", " pro ", " které "]):
-                    return "cs", 0.70
-                if any(tok in s for tok in [" oraz ", " nie ", " jest ", " ale "]):
-                    return "pl", 0.70
-                if any(tok in s for tok in [" és ", " nem ", " van ", " hogy "]):
-                    return "hu", 0.70
-                if any(tok in s for tok in [" the ", " and ", " is ", " not ", " for "]):
-                    return "en", 0.85
-                return "en", 0.50
-
-        class _FallbackLangId:
-            def __init__(self, primary: _Any, fallback: _Any) -> None:
-                self._p = primary
-                self._f = fallback
-
-            def detect(
-                self,
-                text: str,
-                hints: dict[str, _Any] | None = None,
-                *,
-                context: dict[str, _Any] | None = None,
-            ) -> tuple[str, float]:
-                try:
-                    return self._p.detect(text, hints, context=context)
-                except _LangDetectErr:
-                    return self._f.detect(text, hints, context=context)
-
-            def capabilities(self) -> dict:
-                return {"name": "ft-with-heuristic-fallback", "deterministic": True}
-
-        detector = _FallbackLangId(_ft, _HeuristicLangId())
-
         # 2) Read or convert file to Markdown text
         p = Path(str(file_path))
         if not p.exists() or not p.is_file():
-            return {"error": f"File not found: {file_path}"}
+            diag["error"] = {"stage": "open", "message": f"File not found: {file_path}"}
+            log_path = _write_langid_log(diag)
+            return {"error": f"File not found: {file_path} (see {log_path})"}
         ext = p.suffix.lower().lstrip(".")
         md_text = ""
+        diag["file_info"] = {
+            "ext": ext,
+            "size": int(p.stat().st_size),
+            "mtime": _dt.fromtimestamp(p.stat().st_mtime).isoformat(),
+        }
         try:
             if ext in {"md", "markdown", "txt"}:
                 md_text = p.read_text(encoding="utf-8", errors="ignore")
             else:
-                # Build a RawDocument and route to appropriate adapter
                 from preprocessing.domain.models import RawDocument  # type: ignore
 
                 size = p.stat().st_size
                 mtime = _dt.fromtimestamp(p.stat().st_mtime)
                 raw = RawDocument(path=p, size=size, mtime=mtime, ext=ext)
-                # Minimal adapter mapping (reuse existing offline adapters)
                 parser = None
                 if ext == "docx":
                     from preprocessing.adapters.parsers.docx_to_md import DocxToMd as _Docx  # type: ignore
@@ -255,28 +327,425 @@ class GuiServices:
 
                     parser = _Jpg()  # type: ignore
                 else:
-                    return {"error": f"Unsupported file type: .{ext}"}
+                    diag["error"] = {
+                        "stage": "convert",
+                        "message": f"Unsupported file type: .{ext}",
+                    }
+                    log_path = _write_langid_log(diag)
+                    return {"error": f"Unsupported file type: .{ext} (see {log_path})"}
                 parsed = parser.parse(raw)
-                # Adapters return MarkdownDoc or a fallback with .text_md
                 md_text = getattr(parsed, "text_md", "")
         except Exception as e:
-            return {"error": f"Failed to read/convert file: {e}"}
+            diag["error"] = {"stage": "convert", "exc": repr(e)}
+            log_path = _write_langid_log(diag)
+            return {"error": f"Failed to read/convert file: {e} (see {log_path})"}
 
-        # 3) Detect language
+        # 3) Detect language with no fallback
         try:
-            lang, conf = detector.detect(
+            # Proactively load to capture load errors distinctly
+            _ftdet.load()
+            lang, conf = _ftdet.detect(
                 md_text, hints={"candidates": cfg_candidates, "path": str(p)}
             )
+            # Collect adapter stats if available
+            stats = getattr(_ftdet, "_last_stats", None)
+            if isinstance(stats, dict):
+                diag["adapter_stats"] = stats
+            diag["result"] = {"lang": lang, "confidence": float(conf)}
+            diag["status"] = "OK"
+            log_path = _write_langid_log(diag)
         except Exception as e:
-            return {"error": f"Detection failed: {e}"}
+            # Capture DomainError details if present
+            err: dict[str, Any] = {"exc": e.__class__.__name__, "str": str(e)}
+            if hasattr(e, "code"):
+                err["code"] = getattr(e, "code")
+            if hasattr(e, "message"):
+                err["message"] = getattr(e, "message")
+            if hasattr(e, "details"):
+                err["details"] = getattr(e, "details")
+            diag["error"] = {"stage": "detect", **err}
+            diag["status"] = "ERROR"
+            log_path = _write_langid_log(diag)
+            return {"error": f"Detection failed: {e} (see {log_path})"}
 
-        engine = getattr(detector, "capabilities", lambda: {"name": "unknown"})()
         return {
             "path": str(p),
-            "lang": str(lang),
-            "confidence": float(conf),
-            "engine": engine.get("name") if isinstance(engine, dict) else str(engine),
+            "lang": str(diag["result"]["lang"]),
+            "confidence": float(diag["result"]["confidence"]),
+            "engine": "fasttext-lid176",
+            "chars_used": int(diag.get("adapter_stats", {}).get("chars_used", len(md_text or ""))),
+            "log": log_path,
+        }
+
+    def lang_detect_topk(
+        self,
+        file_path: str,
+        *,
+        k: int = 5,
+        candidates: list[str] | None = None,
+        max_chars: int | None = None,
+        min_chars: int | None = None,
+    ) -> dict[str, Any]:
+        """Return top-k language candidates and selection for a single document.
+
+        Returns a dict with keys: {path, lang_code, confidence, topk, flags, chars_used}.
+        """
+        from pathlib import Path
+        from datetime import datetime as _dt
+        import os, sys, platform
+
+        diag: dict[str, Any] = {
+            "started": _dt.now().astimezone().isoformat(),
+            "mode": "topk",
+            "file": str(file_path),
+        }
+
+        try:
+            from preprocessing import settings_translation as st  # type: ignore
+            from preprocessing.adapters.langid.fasttext_langid import FastTextLangId  # type: ignore
+        except Exception as e:
+            diag["error"] = {"stage": "import", "exc": repr(e)}
+            log_path = _write_langid_log(diag)
+            return {"error": f"Language detector unavailable: {e} (see {log_path})"}
+
+        langid_cfg = dict(st.TRANSLATION.get("langid", {}))
+        model_path = str(langid_cfg.get("model_path"))
+        model_abs = os.path.abspath(model_path)
+        cfg_candidates = [c.lower() for c in (candidates or langid_cfg.get("candidates", []))]
+        if isinstance(max_chars, int) and max_chars > 0:
+            langid_cfg["max_chars"] = int(max_chars)
+        if isinstance(min_chars, int) and min_chars > 0:
+            langid_cfg["min_chars"] = int(min_chars)
+        diag["config"] = {
+            "model_path": model_path,
+            "model_abspath": model_abs,
+            "max_chars": int(langid_cfg.get("max_chars", 5000) or 5000),
+            "min_chars": int(langid_cfg.get("min_chars", 50) or 50),
+            "candidates": list(cfg_candidates or []),
+            "k": int(k) if k is not None else 5,
+        }
+        diag["env"] = {"python": sys.version, "platform": platform.platform()}
+        try:
+            import fasttext as _ft  # type: ignore
+
+            diag["fasttext"] = {
+                "available": True,
+                "version": getattr(_ft, "__version__", "unknown"),
+            }
+        except Exception as e:
+            diag["fasttext"] = {"available": False, "import_exc": e.__class__.__name__}
+
+        detector = FastTextLangId(
+            model_path,
+            max_chars=int(langid_cfg.get("max_chars", 5000) or 5000),
+            min_chars=int(langid_cfg.get("min_chars", 50) or 50),
+            candidates=list(cfg_candidates or []),
+        )
+
+        p = Path(str(file_path))
+        if not p.exists() or not p.is_file():
+            diag["error"] = {"stage": "open", "message": f"File not found: {file_path}"}
+            log_path = _write_langid_log(diag)
+            return {"error": f"File not found: {file_path} (see {log_path})"}
+        ext = p.suffix.lower().lstrip(".")
+        md_text = ""
+        try:
+            if ext in {"md", "markdown", "txt"}:
+                md_text = p.read_text(encoding="utf-8", errors="ignore")
+            else:
+                from preprocessing.domain.models import RawDocument  # type: ignore
+
+                size = p.stat().st_size
+                mtime = _dt.fromtimestamp(p.stat().st_mtime)
+                raw = RawDocument(path=p, size=size, mtime=mtime, ext=ext)
+                if ext == "docx":
+                    from preprocessing.adapters.parsers.docx_to_md import DocxToMd as _Docx  # type: ignore
+
+                    parser = _Docx()
+                elif ext == "pdf":
+                    from preprocessing.adapters.parsers.pdf_to_md import PdfToMd as _Pdf  # type: ignore
+
+                    parser = _Pdf()
+                elif ext == "xlsx":
+                    from preprocessing.adapters.parsers.xlsx_to_md import XlsxToMd as _Xlsx  # type: ignore
+
+                    parser = _Xlsx()  # type: ignore
+                elif ext == "msg":
+                    from preprocessing.adapters.parsers.msg_to_md import MsgToMd as _Msg  # type: ignore
+
+                    parser = _Msg()
+                elif ext in {"jpg", "jpeg"}:
+                    from preprocessing.adapters.parsers.jpg_to_md import JpgToMd as _Jpg  # type: ignore
+
+                    parser = _Jpg()  # type: ignore
+                else:
+                    diag["error"] = {
+                        "stage": "convert",
+                        "message": f"Unsupported file type: .{ext}",
+                    }
+                    log_path = _write_langid_log(diag)
+                    return {"error": f"Unsupported file type: .{ext} (see {log_path})"}
+                parsed = parser.parse(raw)
+                md_text = getattr(parsed, "text_md", "")
+        except Exception as e:
+            diag["error"] = {"stage": "convert", "exc": repr(e)}
+            log_path = _write_langid_log(diag)
+            return {"error": f"Failed to read/convert file: {e} (see {log_path})"}
+
+        try:
+            detector.load()
+            result = detector.detect_topk(
+                md_text,
+                k=int(k) if k is not None else 5,
+                hints={"candidates": cfg_candidates, "path": str(p)},
+            )
+            stats = getattr(detector, "_last_stats", None)
+            if isinstance(stats, dict):
+                diag["adapter_stats"] = dict(stats)
+            diag["result"] = result
+            diag["status"] = "OK"
+            log_path = _write_langid_log(diag)
+        except Exception as e:
+            err: dict[str, Any] = {"exc": e.__class__.__name__, "str": str(e)}
+            if hasattr(e, "code"):
+                err["code"] = getattr(e, "code")
+            if hasattr(e, "message"):
+                err["message"] = getattr(e, "message")
+            if hasattr(e, "details"):
+                err["details"] = getattr(e, "details")
+            diag["error"] = {"stage": "detect_topk", **err}
+            diag["status"] = "ERROR"
+            log_path = _write_langid_log(diag)
+            return {"error": f"Detection failed: {e} (see {log_path})"}
+
+        return {
+            "path": str(p),
+            "lang_code": result.get("lang_code"),
+            "confidence": result.get("confidence"),
+            "topk": result.get("topk", []),
+            "flags": result.get("flags", {}),
             "chars_used": len(md_text or ""),
+            "log": log_path,
+        }
+
+    def lang_detect_advanced_routing(
+        self,
+        file_path: str,
+        *,
+        k: int = 5,
+        candidates: list[str] | None = None,
+        max_chars: int | None = None,
+        min_chars: int | None = None,
+        routing_config: Mapping[str, Any] | None = None,
+        enable_translation_test: bool = False,
+    ) -> dict[str, Any]:
+        """Analyze language with top-k and simple routing heuristics.
+
+        Returns dict with keys: path, lang_code, confidence, topk, flags, chars_used,
+        routing={probe_triggered, selected_src, probe_reason?, translation_test?}.
+        """
+        from pathlib import Path
+        from datetime import datetime as _dt
+        import os, sys, platform
+
+        diag: dict[str, Any] = {
+            "started": _dt.now().astimezone().isoformat(),
+            "mode": "advanced",
+            "file": str(file_path),
+            "routing_config": dict(routing_config or {}),
+        }
+
+        try:
+            from preprocessing import settings_translation as st  # type: ignore
+            from preprocessing.adapters.langid.fasttext_langid import FastTextLangId  # type: ignore
+            from preprocessing.adapters.langid.english_detector_fasttext import (  # type: ignore
+                FastTextEnglishDetector,
+            )
+        except Exception as e:
+            diag["error"] = {"stage": "import", "exc": repr(e)}
+            log_path = _write_langid_log(diag)
+            return {"error": f"Language detector unavailable: {e} (see {log_path})"}
+
+        langid_cfg = dict(st.TRANSLATION.get("langid", {}))
+        model_path = str(langid_cfg.get("model_path"))
+        model_abs = os.path.abspath(model_path)
+        cfg_candidates = [c.lower() for c in (candidates or langid_cfg.get("candidates", []))]
+        if isinstance(max_chars, int) and max_chars > 0:
+            langid_cfg["max_chars"] = int(max_chars)
+        if isinstance(min_chars, int) and min_chars > 0:
+            langid_cfg["min_chars"] = int(min_chars)
+
+        diag["config"] = {
+            "model_path": model_path,
+            "model_abspath": model_abs,
+            "max_chars": int(langid_cfg.get("max_chars", 5000) or 5000),
+            "min_chars": int(langid_cfg.get("min_chars", 50) or 50),
+            "candidates": list(cfg_candidates or []),
+            "k": int(k) if k is not None else 5,
+        }
+        diag["env"] = {"python": sys.version, "platform": platform.platform()}
+        try:
+            import fasttext as _ft  # type: ignore
+
+            diag["fasttext"] = {
+                "available": True,
+                "version": getattr(_ft, "__version__", "unknown"),
+            }
+        except Exception as e:
+            diag["fasttext"] = {"available": False, "import_exc": e.__class__.__name__}
+
+        detector = FastTextLangId(
+            model_path,
+            max_chars=int(langid_cfg.get("max_chars", 5000) or 5000),
+            min_chars=int(langid_cfg.get("min_chars", 50) or 50),
+            candidates=list(cfg_candidates or []),
+        )
+
+        p = Path(str(file_path))
+        if not p.exists() or not p.is_file():
+            diag["error"] = {"stage": "open", "message": f"File not found: {file_path}"}
+            log_path = _write_langid_log(diag)
+            return {"error": f"File not found: {file_path} (see {log_path})"}
+        ext = p.suffix.lower().lstrip(".")
+        md_text = ""
+        try:
+            if ext in {"md", "markdown", "txt"}:
+                md_text = p.read_text(encoding="utf-8", errors="ignore")
+            else:
+                from preprocessing.domain.models import RawDocument  # type: ignore
+
+                size = p.stat().st_size
+                mtime = _dt.fromtimestamp(p.stat().st_mtime)
+                raw = RawDocument(path=p, size=size, mtime=mtime, ext=ext)
+                if ext == "docx":
+                    from preprocessing.adapters.parsers.docx_to_md import DocxToMd as _Docx  # type: ignore
+
+                    parser = _Docx()
+                elif ext == "pdf":
+                    from preprocessing.adapters.parsers.pdf_to_md import PdfToMd as _Pdf  # type: ignore
+
+                    parser = _Pdf()
+                elif ext == "xlsx":
+                    from preprocessing.adapters.parsers.xlsx_to_md import XlsxToMd as _Xlsx  # type: ignore
+
+                    parser = _Xlsx()  # type: ignore
+                elif ext == "msg":
+                    from preprocessing.adapters.parsers.msg_to_md import MsgToMd as _Msg  # type: ignore
+
+                    parser = _Msg()
+                elif ext in {"jpg", "jpeg"}:
+                    from preprocessing.adapters.parsers.jpg_to_md import JpgToMd as _Jpg  # type: ignore
+
+                    parser = _Jpg()  # type: ignore
+                else:
+                    diag["error"] = {
+                        "stage": "convert",
+                        "message": f"Unsupported file type: .{ext}",
+                    }
+                    log_path = _write_langid_log(diag)
+                    return {"error": f"Unsupported file type: .{ext} (see {log_path})"}
+                parsed = parser.parse(raw)
+                md_text = getattr(parsed, "text_md", "")
+        except Exception as e:
+            diag["error"] = {"stage": "convert", "exc": repr(e)}
+            log_path = _write_langid_log(diag)
+            return {"error": f"Failed to read/convert file: {e} (see {log_path})"}
+
+        # Base top-k detection
+        try:
+            detector.load()
+            base = detector.detect_topk(
+                md_text,
+                k=int(k) if k is not None else 5,
+                hints={"candidates": cfg_candidates, "path": str(p)},
+            )
+            diag["base"] = base
+            stats = getattr(detector, "_last_stats", None)
+            if isinstance(stats, dict):
+                diag["adapter_stats"] = dict(stats)
+        except Exception as e:
+            err: dict[str, Any] = {"exc": e.__class__.__name__, "str": str(e)}
+            if hasattr(e, "code"):
+                err["code"] = getattr(e, "code")
+            if hasattr(e, "message"):
+                err["message"] = getattr(e, "message")
+            if hasattr(e, "details"):
+                err["details"] = getattr(e, "details")
+            diag["error"] = {"stage": "detect_topk", **err}
+            diag["status"] = "ERROR"
+            log_path = _write_langid_log(diag)
+            return {"error": f"Detection failed: {e} (see {log_path})"}
+
+        lang_code = base.get("lang_code")
+        confidence = float(base.get("confidence", 0.0) or 0.0)
+        topk_list = list(base.get("topk", []))
+        flags = dict(base.get("flags", {}))
+
+        # Routing heuristics
+        rc = dict(routing_config or {})
+        tau_low = float(rc.get("tau_low", 0.70))
+        delta_close = float(rc.get("delta_close", 0.05))
+        tau_en = float(rc.get("tau_en", 0.90))
+        sim_noop = float(rc.get("similarity_noop_threshold", 0.92))
+
+        probe_triggered = confidence < tau_low
+        probe_reason = "low_confidence" if probe_triggered else None
+        if not probe_triggered and len(topk_list) >= 2:
+            # close top-2 by raw score delta
+            close = abs(float(topk_list[0]["score"]) - float(topk_list[1]["score"])) < delta_close
+            if close:
+                probe_triggered = True
+                probe_reason = "close_top2"
+        selected_src = str(lang_code or "")
+
+        routing: dict[str, Any] = {
+            "probe_triggered": bool(probe_triggered),
+            "selected_src": selected_src,
+        }
+        if probe_triggered and probe_reason:
+            routing["probe_reason"] = probe_reason
+
+        # Optional translation quality test (approximation without translating)
+        if enable_translation_test:
+            try:
+                en_det = FastTextEnglishDetector(model_path)
+                en_conf = float(en_det.english_confidence(md_text))
+            except Exception:
+                en_conf = 0.0
+
+            # Simple token-overlap similarity as a placeholder (0..1)
+            def _tok_set(s: str) -> set[str]:
+                return set([t for t in (s or "").lower().split() if t.isalpha() or t.isalnum()])
+
+            tokens = _tok_set(md_text)
+            # Without actual translation, treat similarity as 0 (unknown) to avoid false positives
+            sim = 0.0 if not tokens else 0.0
+            passed = (en_conf >= tau_en) and (sim <= sim_noop)
+            routing["translation_test"] = {
+                "en_confidence": en_conf,
+                "similarity": sim,
+                "passed": bool(passed),
+            }
+
+        diag["result"] = {
+            "lang_code": lang_code,
+            "confidence": confidence,
+            "topk": topk_list,
+            "flags": flags,
+            "routing": routing,
+        }
+        diag["status"] = "OK"
+        log_path = _write_langid_log(diag)
+
+        return {
+            "path": str(p),
+            "lang_code": lang_code,
+            "confidence": confidence,
+            "topk": topk_list,
+            "flags": flags,
+            "chars_used": len(md_text or ""),
+            "routing": routing,
+            "log": log_path,
         }
 
     # --- Anonymization ---

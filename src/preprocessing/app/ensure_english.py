@@ -37,6 +37,8 @@ from preprocessing.domain.ports import (
     TranslatePort,
     WriterContext,
 )
+from preprocessing.domain.ports import EnglishDetectPort, SimilarityPort
+from preprocessing.settings_translation import TRANSLATION as _TR_SETTINGS
 
 # -----------------------------
 # Public typed shapes
@@ -130,6 +132,9 @@ class _PortsBundle(Protocol):
         glossary: Optional GlossaryPort, if your translate adapter delegates to it or exposes it.
         cache: Optional CachePort, if your translate adapter exposes it.
         writer_ctx: Optional WriterContext on the bundle for convenience (alternative to cfg.writer_ctx).
+        english_detector: Optional EnglishDetectPort for validation and probing.
+        similarity: Optional SimilarityPort for near-identity detection.
+        translate_secondary: Optional secondary TranslatePort used for deterministic fallback.
     """
 
     langid: LanguageDetectPort
@@ -138,6 +143,9 @@ class _PortsBundle(Protocol):
     glossary: GlossaryPort | None
     cache: CachePort | None
     writer_ctx: WriterContext | None
+    english_detector: EnglishDetectPort | None
+    similarity: SimilarityPort | None
+    translate_secondary: TranslatePort | None
 
 
 # -----------------------------
@@ -190,6 +198,9 @@ def ensure_english_variant(
             - glossary: Optional GlossaryPort (not directly used here)
             - cache: Optional CachePort (not directly used here)
             - writer_ctx: Optional WriterContext (alternative to cfg.writer_ctx)
+            - english_detector: Optional EnglishDetectPort used for validation and probe selection
+            - similarity: Optional SimilarityPort to detect near-identity outputs
+            - translate_secondary: Optional secondary TranslatePort for fallback
         cfg: Read-only configuration dict/dataclass controlling behavior:
             - tgt_lang: Target language (default "en").
             - style: "natural" | "literal" (advice to translate engine).
@@ -201,6 +212,7 @@ def ensure_english_variant(
             - copy_when_already_en: Bool, whether to write/copy when source is English and output missing (default True).
             - en_confidence_threshold: Float [0,1] to treat detected English as already English (default 0.95).
             - writer_ctx: WriterContext for the writer; required unless provided via ports.
+            - routing: Optional dict overriding settings_translation.TRANSLATION["routing"].
         context: Optional dict with trace data (run_id, doc_id, src_path_rel). Safe to ignore by adapters.
 
     Returns:
@@ -230,6 +242,17 @@ def ensure_english_variant(
     dry_run = bool(_cfg_get(cfg, "dry_run", False))
     copy_when_already_en = bool(_cfg_get(cfg, "copy_when_already_en", True))
     en_threshold = float(_cfg_get(cfg, "en_confidence_threshold", 0.95))
+    routing_cfg = dict(getattr(cfg, "routing", None) or _cfg_get(cfg, "routing", {})) or dict(
+        _TR_SETTINGS.get("routing", {})
+    )
+    tau_low = float(routing_cfg.get("tau_low", 0.70))
+    delta_close = float(routing_cfg.get("delta_close", 0.05))
+    tau_en = float(routing_cfg.get("tau_en", 0.90))
+    sim_noop = float(routing_cfg.get("similarity_noop_threshold", 0.92))
+    probe_k = int(routing_cfg.get("probe", {}).get("k", 3))
+    probe_slice = int(routing_cfg.get("probe", {}).get("slice_chars", 600))
+    max_retries = int(routing_cfg.get("max_retries", 3))
+    cand_scope = list(routing_cfg.get("candidates", []) or [])
 
     # Resolve writer context early (used for existence check and planning/writing)
     writer_ctx = _resolve_writer_ctx(ports, cfg)
@@ -261,18 +284,41 @@ def ensure_english_variant(
             "meta": {"timings": {"detect_ms": 0.0, "translate_ms": 0.0, "write_ms": 0.0}},
         }
 
-    # Language decision
+    # Language decision (with optional top-k)
     detect_ms = 0.0
     src_lang: str | None = doc.lang.lower() if isinstance(doc.lang, str) else None
     detected_conf: float | None = None
+    topk_info: list[dict[str, Any]] = []
+    detect_flags: dict[str, bool] = {}
     if not src_lang:
         try:
             t_detect = time.perf_counter()
-            src_lang, detected_conf = ports.langid.detect(
-                doc.text_md,
-                hints={"doc_id": doc.doc_id, "path": doc.path},
-                context=context,
-            )
+            # Prefer top-k when available
+            if hasattr(ports.langid, "detect_topk"):
+                res = ports.langid.detect_topk(
+                    doc.text_md,
+                    k=5,
+                    hints={
+                        "candidates": cand_scope or None,
+                        "doc_id": doc.doc_id,
+                        "path": doc.path,
+                    },
+                    context=context,
+                )
+                src_lang = res.get("lang_code", None)
+                detected_conf = res.get("confidence", None)
+                topk_info = list(res.get("topk", []))
+                detect_flags = dict(res.get("flags", {}))
+            else:
+                src_lang, detected_conf = ports.langid.detect(
+                    doc.text_md,
+                    hints={
+                        "doc_id": doc.doc_id,
+                        "path": doc.path,
+                        "candidates": cand_scope or None,
+                    },
+                    context=context,
+                )
             detect_ms = (time.perf_counter() - t_detect) * 1000.0
             src_lang = (src_lang or "").lower() or None
         except LanguageDetectError as e:
@@ -302,6 +348,7 @@ def ensure_english_variant(
                 "meta": {
                     "reason": "already_en",
                     "timings": {"detect_ms": detect_ms, "translate_ms": 0.0, "write_ms": 0.0},
+                    "routing": {"topk": topk_info, "flags": detect_flags},
                 },
             }
 
@@ -314,6 +361,7 @@ def ensure_english_variant(
                 "meta": {
                     "reason": "already_en",
                     "timings": {"detect_ms": detect_ms, "translate_ms": 0.0, "write_ms": 0.0},
+                    "routing": {"topk": topk_info, "flags": detect_flags},
                 },
             }
 
@@ -340,6 +388,7 @@ def ensure_english_variant(
                             "translate_ms": 0.0,
                             "write_ms": write_ms,
                         },
+                        "routing": {"topk": topk_info, "flags": detect_flags},
                     },
                 }
             except WriteError as e:
@@ -362,10 +411,11 @@ def ensure_english_variant(
             "meta": {
                 "reason": "already_en",
                 "timings": {"detect_ms": detect_ms, "translate_ms": 0.0, "write_ms": 0.0},
+                "routing": {"topk": topk_info, "flags": detect_flags},
             },
         }
 
-    # Translation path
+    # Translation path (may use advanced routing if english_detector & similarity present)
     options: dict[str, Any] = {
         "style": style,
         "glossary_id": glossary_id,
@@ -374,17 +424,156 @@ def ensure_english_variant(
     }
     translate_ms = 0.0
     write_ms = 0.0
-    try:
-        t_tr = time.perf_counter()
-        en_doc = ports.translate.translate_md(
-            doc,
-            src_lang=str(src_lang or "auto"),
-            tgt_lang=tgt_lang,
-            options=options,
-            context=context,
+
+    # Advanced routing candidates
+    def _gather_candidates() -> list[str]:
+        if topk_info:
+            return [c["code"].lower() for c in topk_info if isinstance(c.get("code"), str)]
+        return [src_lang] if src_lang else []
+
+    def _probe_choose(codes: list[str]) -> str:
+        # Run micro-probe across codes using english_detector + similarity
+        if not hasattr(ports, "english_detector") or not hasattr(ports, "similarity"):
+            return codes[0] if codes else (src_lang or "auto")
+        en_det = getattr(ports, "english_detector", None)
+        sim = getattr(ports, "similarity", None)
+        if not en_det or not sim:
+            return codes[0] if codes else (src_lang or "auto")
+        # Prepare slice
+        txt = (doc.text_md or "").strip()
+        if len(txt) > probe_slice:
+            head = txt[: probe_slice // 2]
+            tail = txt[-(probe_slice - len(head)) :]
+            sample = head + "\n" + tail
+        else:
+            sample = txt
+        best_code = None
+        best_score = -1.0
+        tried = 0
+        for code in codes:
+            if code == "en":
+                continue
+            if tried >= probe_k:
+                break
+            tried += 1
+            try:
+                tmp_doc = doc.copy_with(text_md=sample)
+                out = ports.translate.translate_md(
+                    tmp_doc, src_lang=code, tgt_lang=tgt_lang, options=options, context=context
+                )
+                en_conf = en_det.english_confidence(out.text_md)
+                s = sim.similarity(sample, out.text_md)
+                score = float(en_conf) - 0.5 * float(s)  # deterministic composite
+                if score > best_score:
+                    best_score = score
+                    best_code = code
+            except Exception:
+                continue
+        return best_code or (codes[0] if codes else (src_lang or "auto"))
+
+    selected_src = src_lang or "auto"
+    # Decide if we should probe based on thresholds
+    need_probe = False
+    if hasattr(ports.langid, "detect_topk") and topk_info:
+        top1 = topk_info[0]
+        top2 = topk_info[1] if len(topk_info) > 1 else None
+        margin = (
+            abs((top1.get("score", 0.0) or 0.0) - (top2.get("score", 0.0) or 0.0)) if top2 else 1.0
         )
-        translate_ms = (time.perf_counter() - t_tr) * 1000.0
-    except TranslationError as e:
+        low_conf = (detected_conf or 0.0) < tau_low
+        close = margin < delta_close
+        need_probe = low_conf or close
+
+    if need_probe and hasattr(ports, "english_detector") and hasattr(ports, "similarity"):
+        cand_codes = [
+            c
+            for c in _gather_candidates()
+            if c in (cand_scope or [c for c in _gather_candidates()])
+        ]
+        if cand_codes:
+            selected_src = _probe_choose(cand_codes)
+
+    # Deterministic retry ladder with validation
+    tried: list[tuple[str, str]] = []  # (engine_name, src_code)
+    engines: list[tuple[str, TranslatePort]] = [("primary", ports.translate)]
+    if hasattr(ports, "translate_secondary") and getattr(ports, "translate_secondary", None):
+        engines.append(("secondary", getattr(ports, "translate_secondary")))
+
+    # Build ordered source list: selected, then remaining topk in order
+    sources = []
+    if selected_src and selected_src != "auto":
+        sources.append(selected_src)
+    for c in _gather_candidates():
+        if c not in sources and c != "en":
+            sources.append(c)
+    if not sources and src_lang:
+        sources = [src_lang]
+
+    validation_meta: dict[str, Any] = {
+        "tau_en": tau_en,
+        "similarity_noop_threshold": sim_noop,
+        "selected_src": selected_src,
+        "topk": topk_info,
+        "probe": need_probe,
+    }
+
+    en_doc: MarkdownDoc | None = None
+    last_error: dict[str, Any] | None = None
+    attempts = 0
+    for eng_name, engine in engines:
+        for src in sources:
+            if attempts >= max_retries:
+                break
+            attempts += 1
+            tried.append((eng_name, src))
+            try:
+                t_tr = time.perf_counter()
+                cand_doc = engine.translate_md(
+                    doc, src_lang=src, tgt_lang=tgt_lang, options=options, context=context
+                )
+                translate_ms = (time.perf_counter() - t_tr) * 1000.0
+            except TranslationError as e:
+                last_error = e.to_dict()
+                continue
+
+            # Post-translation validation when advanced ports present
+            if hasattr(ports, "english_detector") and hasattr(ports, "similarity"):
+                en_det = getattr(ports, "english_detector", None)
+                sim = getattr(ports, "similarity", None)
+                if en_det and sim:
+                    try:
+                        en_conf = float(en_det.english_confidence(cand_doc.text_md))
+                    except Exception:
+                        en_conf = 0.0
+                    try:
+                        similarity = float(sim.similarity(doc.text_md, cand_doc.text_md))
+                    except Exception:
+                        similarity = 1.0
+                    validation_meta.update(
+                        {
+                            "en_confidence": en_conf,
+                            "similarity": similarity,
+                            "engine_attempt": eng_name,
+                            "src_attempt": src,
+                        }
+                    )
+                    if en_conf >= tau_en and similarity < sim_noop:
+                        en_doc = cand_doc
+                        break  # success
+                    else:
+                        last_error = {
+                            "code": "post_validation_failed",
+                            "message": "output did not meet EN confidence or similarity thresholds",
+                            "details": {"en_conf": en_conf, "similarity": similarity},
+                        }
+                        continue
+            # If no advanced validators, accept first success
+            en_doc = cand_doc
+            break
+        if en_doc is not None:
+            break
+
+    if en_doc is None:
         return {
             "status": "failed",
             "src_lang": src_lang,
@@ -397,8 +586,10 @@ def ensure_english_variant(
                     "translate_ms": translate_ms,
                     "write_ms": write_ms,
                 },
+                "routing": validation_meta,
+                "attempts": tried,
             },
-            "error": e.to_dict(),
+            "error": last_error or {"code": "unresolved", "message": "exhausted retry ladder"},
         }
 
     # Validation of invariants on returned MarkdownDoc
@@ -474,6 +665,7 @@ def ensure_english_variant(
                         "translate_ms": translate_ms,
                         "write_ms": 0.0,
                     },
+                    "routing": validation_meta,
                     "dry_run": True,
                 },
             }
@@ -515,6 +707,7 @@ def ensure_english_variant(
                     "translate_ms": translate_ms,
                     "write_ms": write_ms,
                 },
+                "routing": validation_meta,
             },
         }
     except WriteError as e:

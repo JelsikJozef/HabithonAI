@@ -254,3 +254,41 @@ This layering keeps the CLI import-light and enables deterministic, testable beh
 ## License
 
 MIT
+
+
+## Advanced routing (model-only, no heuristics)
+
+Purpose: choose the correct source language and verify that non-English inputs are actually translated into English. Uses only model scores and deterministic thresholds.
+
+Components:
+- Domain ports:
+  - LanguageDetectTopKPort.detect_topk(text, k, hints) ➜ {lang_code, confidence, topk[], flags}
+  - EnglishDetectPort.english_confidence(text) ➜ float [0,1]
+  - SimilarityPort.similarity(a, b) ➜ float [0,1] (1 == identical)
+- Adapters:
+  - fastText LangID top-k (adapters/langid/fasttext_langid.py)
+  - fastText English detector (adapters/langid/english_detector_fasttext.py)
+  - Trigram Jaccard similarity (adapters/similarity/simple_similarity.py)
+
+Policy (app layer: app/ensure_english.py):
+- Document-level LangID via top-k. If confidence < τ_low or top-1 vs top-2 margin < δ_close, run a pre-translation probe on a small slice using a few top-k candidates. Select the source that maximizes English-confidence minus a small similarity penalty.
+- Translate with the selected source. Validate output: English-confidence ≥ τ_en and similarity(input, output) < similarity_noop_threshold (not near-identity) when source ≠ en.
+- Retry ladder (bounded): primary engine with selected source, then other top-k sources, then optional secondary engine with the same order, up to max_retries.
+- Telemetry: per-document meta.routing includes topk, flags, selected_src, probe, attempts, and post-check metrics (en_confidence, similarity) for audit.
+
+Configuration (settings_translation.TRANSLATION["routing"]):
+- tau_low: float, LangID low-confidence threshold (default 0.70)
+- delta_close: float, top-1 vs top-2 closeness margin (default 0.05)
+- tau_en: float, English confidence threshold for outputs (default 0.90)
+- similarity_noop_threshold: float, identity detection (default 0.92)
+- probe: { k: int candidates (default 3), slice_chars: int sample size (default 600) }
+- max_retries: int, cap on attempts across engines/sources (default 3)
+- candidates: list[str], candidate source codes limit
+
+Minimal wiring (optional, for full routing):
+- Provide ports.english_detector and ports.similarity to ensure_english.* functions; otherwise, the flow runs without probe/post-checks but remains backwards-compatible.
+
+Environment overrides:
+- HABITHON_ROUTING_TAU_LOW, HABITHON_ROUTING_DELTA_CLOSE, HABITHON_ROUTING_TAU_EN,
+  HABITHON_ROUTING_SIM_NOOP, HABITHON_ROUTING_PROBE_K, HABITHON_ROUTING_PROBE_SLICE_CHARS,
+  HABITHON_ROUTING_MAX_RETRIES

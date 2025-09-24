@@ -10,3 +10,8 @@ fasttext>=0.9.2; platform_system != "Darwin"
 
 # Optional: building a standalone app bundle
 pyinstaller>=6,<7
+
+# Parsers for DOCX/PDF/MSG support used by the converter
+python-docx>=0.8.11
+pdfminer.six>=20221105
+extract_msg>=0.48.5

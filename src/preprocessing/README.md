@@ -24,21 +24,22 @@ Use cases:
 - Translate-only: take existing Markdown trees and add an English variant.
 
 
-## English variant translation
+## English variant and anonymization
 
-Why: English unification up-front simplifies later anonymization, enrichment, and retrieval. The translation step is deterministic and offline for reproducibility.
+- To generate English Markdown variants offline:
+  - mdify --src <in_dir> --out <out_dir> --make-english --translate-only
 
-How it works:
-- Language detection: fastText model lid.176.bin (local file). Candidates can be constrained for better routing.
-- Engines (offline only):
-  - ct2_nllb: CTranslate2 runtime with NLLB model; SentencePiece tokenizer.
-  - marian_opus: Hugging Face Transformers Marian models (CPU by default). Must exist in local cache or as local paths.
-- Markdown segmenter: Extracts only human text nodes; preserves code fences/inline code, link and image destinations, headings, tables, and spacing. Options let you translate link labels, alt text, and table cells, and control soft-break collapsing.
-- Glossary (optional): Apply pre/post/both substitutions on plain text segments.
-- Cache (optional): Per-segment translation cache keyed by a deterministic engine fingerprint plus segment text/context.
+- To also produce anonymized copies with deterministic hash tokens:
+  - mdify --src <in_dir> --out <out_dir> --make-english --translate-only --anonymize-en
+  - Outputs are written under: out/hashed_documents/<relative-path> with the filename suffixed as _anon.md
+    - Example: out/en/contract_123.md -> out/hashed_documents/contract_123_anon.md
+  - Optional tenant scoping: add --anon-tenant <tenant_id>
 
-Outputs:
-- The English variant is written under an en/ subfolder within the output tree, with variant metadata preserved.
+Environment hints (propagated to anonymization package):
+- ANON_DETECTORS=regex to avoid Presidio and use the built-in regex detector.
+- ANON_POSTGRES_DSN to persist token mappings in Postgres instead of local files.
+- ANON_KEYSET to configure HMAC keys for deterministic hashing:
+  {"active_kid":"kidA","keys":{"kidA":"<base64-32B>"}}
 
 
 ## CLI — mdify
@@ -161,6 +162,7 @@ Environment overrides (examples):
 
 - Converted Markdown mirrors the relative structure from --src under --out.
 - English variant is written under: --out/en/<relative-path>.md
+- Anonymized copies are written under: --out/hashed_documents/<relative-path> with _anon.md suffix.
 - Assets for the English file are placed under the sibling assets/ folder (same name configured by --assets-subdir).
 - When --write-meta=sidecar, a sidecar JSON file file.md.meta.json is written next to the English Markdown.
 

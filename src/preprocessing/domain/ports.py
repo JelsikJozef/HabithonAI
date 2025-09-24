@@ -205,6 +205,35 @@ class LlmEnrichmentPort(Protocol):
         ...
 
 
+# ----------------------------
+# New ports for Prompt 3
+# ----------------------------
+
+
+class Metadata(TypedDict):
+    summary: str
+    tags: list[str]
+
+
+class MetadataGenerator(Protocol):
+    """Generate structured metadata for anonymized text."""
+
+    def generate(self, document_text: str) -> Metadata:
+        """Return metadata with summary and tags.
+
+        Deterministic for identical input. Implementations must not leak vendor exceptions.
+        """
+        ...
+
+
+class DeAnonymizer(Protocol):
+    """Restore original values for hashed/tokenized placeholders in text."""
+
+    def restore(self, anonymized_text: str, *, context_id: str) -> str:
+        """Return de-anonymized text by using stored mappings for the given context_id."""
+        ...
+
+
 class DedupPort(Protocol):
     """Document-level duplicates langid."""
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 
+from ...adapters.crypto.crypto import Crypto as _Crypto
 from ...adapters.detectors.adapter import PresidioDetector
 from ...adapters.token_vault.file_store import FileTokenVault
+from ...domain.anonymizer import anonymize as _anonymize
 from ...domain.entities import DeAnonymizationResult, DetectionResult, PseudonymizationResult
 from ...domain.ports import DetectorPort, TokenVaultPort
 from ..config.pii_settings import PiiSettings
@@ -78,3 +80,29 @@ class PiiService:
         - DeAnonymizationResult with the anonymized input, restored text, and mappings that were applied.
         """
         return _deanonymize(anonymized_text, self.vault, context_id)
+
+    def anonymize(
+        self,
+        text: str,
+        *,
+        context_id: str,
+        language: str | None = None,
+        tenant_id: str | None = None,
+    ) -> PseudonymizationResult:
+        """Deterministically anonymize text using detectors and crypto hashing.
+
+        - text: Source English text to anonymize.
+        - context_id: Mapping namespace (e.g., document ID).
+        - language: Optional hint to detectors.
+        - tenant_id: Optional tenant scope for hashing.
+        """
+        crypto = _Crypto()
+        return _anonymize(
+            text,
+            self.detectors,
+            crypto,
+            self.vault,
+            context_id=context_id,
+            tenant_id=tenant_id,
+            language=language,
+        )

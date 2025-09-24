@@ -24,9 +24,14 @@ Notes:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
+import sqlite3
+
+from ...domain.entities import TokenMapping
+from ...domain.errors import TokenVaultError
+from ...domain.ports import TokenVaultPort
 
 
 def _norm_tenant(tenant_id: str | None) -> str:
@@ -34,14 +39,23 @@ def _norm_tenant(tenant_id: str | None) -> str:
 
 
 @dataclass
-class PostgresTokenVault:
+class PostgresTokenVault(TokenVaultPort):
     dsn: str | None = None
     table: str = "pii_tokens"
     conn_factory: Callable[[], Any] | None = None  # returns a DB-API connection
+    # Sticky connection for sqlite (e.g., :memory:) to preserve schema across calls
+    _sticky_conn: Any | None = None
 
     def _get_conn(self):
         if self.conn_factory is not None:
-            return self.conn_factory()
+            # Reuse sticky sqlite connection if available
+            if self._sticky_conn is not None:
+                return self._sticky_conn
+            conn = self.conn_factory()
+            # Keep sqlite connections open to preserve :memory: state across calls
+            if isinstance(conn, sqlite3.Connection):
+                self._sticky_conn = conn
+            return conn
         if not self.dsn:
             raise RuntimeError("PostgresTokenVault requires either conn_factory or dsn")
         # Lazy import psycopg (v3)
@@ -51,25 +65,47 @@ class PostgresTokenVault:
             raise RuntimeError("psycopg driver not installed") from e
         return psycopg.connect(self.dsn)
 
+    def _should_close(self, conn: Any) -> bool:
+        # Do not close sticky sqlite connection
+        return not (isinstance(conn, sqlite3.Connection) and conn is self._sticky_conn)
+
     def ensure_schema(self) -> None:
-        sql = f"""
-        CREATE TABLE IF NOT EXISTS {self.table} (
-            tenant_id   text NOT NULL,
-            token_id    text NOT NULL,
-            pii_type    text NOT NULL,
-            value_enc   bytea NOT NULL,
-            first_seen  timestamptz NOT NULL DEFAULT NOW(),
-            PRIMARY KEY (tenant_id, token_id)
-        );
-        """
+        # Create schema for sqlite or postgres
         conn = self._get_conn()
         try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql)
+            if isinstance(conn, sqlite3.Connection):
+                create_sql = f"""
+                CREATE TABLE IF NOT EXISTS {self.table} (
+                    tenant_id text NOT NULL,
+                    token_id text NOT NULL,
+                    pii_type text NOT NULL,
+                    value_enc blob NOT NULL,
+                    first_seen timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (tenant_id, token_id)
+                );
+                """
+                cur = conn.cursor()
+                cur.execute(create_sql)
+                conn.commit()
+                cur.close()
+            else:
+                create_sql = f"""
+                CREATE TABLE IF NOT EXISTS {self.table} (
+                    tenant_id   text NOT NULL,
+                    token_id    text NOT NULL,
+                    pii_type    text NOT NULL,
+                    value_enc   bytea NOT NULL,
+                    first_seen  timestamptz NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (tenant_id, token_id)
+                );
+                """
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(create_sql)
         finally:
             try:
-                conn.close()
+                if self._should_close(conn):
+                    conn.close()
             except Exception:
                 pass
 
@@ -78,43 +114,130 @@ class PostgresTokenVault:
         return _norm_tenant(tenant_id)
 
     def upsert(self, token_id: str, tenant_id: str | None, pii_type: str, value: str) -> None:
-        sql = f"""
+        conn = self._get_conn()
+        try:
+            if isinstance(conn, sqlite3.Connection):
+                sql = f"INSERT OR IGNORE INTO {self.table} (tenant_id, token_id, pii_type, value_enc, first_seen) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)"
+                cur = conn.cursor()
+                cur.execute(
+                    sql, (_norm_tenant(tenant_id), token_id, pii_type, value.encode("utf-8"))
+                )
+                conn.commit()
+                cur.close()
+            else:
+                sql = f"""
         INSERT INTO {self.table} (tenant_id, token_id, pii_type, value_enc, first_seen)
         VALUES (%s, %s, %s, %s, NOW())
         ON CONFLICT (tenant_id, token_id) DO NOTHING
         """
-        conn = self._get_conn()
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        sql, (_norm_tenant(tenant_id), token_id, pii_type, value.encode("utf-8"))
-                    )
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            sql,
+                            (_norm_tenant(tenant_id), token_id, pii_type, value.encode("utf-8")),
+                        )
         finally:
             try:
-                conn.close()
+                if self._should_close(conn):
+                    conn.close()
             except Exception:
                 pass
 
     def lookup(self, token_id: str, tenant_id: str | None) -> str | None:
-        sql = f"""
+        conn = self._get_conn()
+        try:
+            if isinstance(conn, sqlite3.Connection):
+                sql = f"SELECT value_enc FROM {self.table} WHERE tenant_id = ? AND token_id = ?"
+                cur = conn.cursor()
+                cur.execute(sql, (_norm_tenant(tenant_id), token_id))
+                row = cur.fetchone()
+                cur.close()
+            else:
+                sql = f"""
         SELECT value_enc FROM {self.table}
         WHERE tenant_id = %s AND token_id = %s
         """
-        conn = self._get_conn()
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql, (_norm_tenant(tenant_id), token_id))
-                    row = cur.fetchone()
-                    if not row:
-                        return None
-                    val_bytes = row[0]
-                    if isinstance(val_bytes, memoryview):
-                        val_bytes = val_bytes.tobytes()
-                    return val_bytes.decode("utf-8")
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(sql, (_norm_tenant(tenant_id), token_id))
+                        row = cur.fetchone()
+            if not row:
+                return None
+            val_bytes = row[0]
+            if isinstance(val_bytes, memoryview):
+                val_bytes = val_bytes.tobytes()
+            if isinstance(val_bytes, bytes):
+                return val_bytes.decode("utf-8")
+            # Some drivers may return str already
+            return str(val_bytes)
         finally:
             try:
-                conn.close()
+                if self._should_close(conn):
+                    conn.close()
+            except Exception:
+                pass
+
+    # Implement TokenVaultPort interface
+    def save_mappings(self, context_id: str, mappings: Iterable[TokenMapping]) -> None:
+        try:
+            for m in mappings:
+                self.upsert(m.token, context_id, m.type, m.value)
+        except Exception as e:
+            raise TokenVaultError(f"Failed to save mappings for {context_id}: {e}")
+
+    def get_mappings(self, context_id: str) -> list[TokenMapping]:
+        conn = self._get_conn()
+        try:
+            if isinstance(conn, sqlite3.Connection):
+                sql = f"SELECT token_id, pii_type, value_enc FROM {self.table} WHERE tenant_id = ?"
+                cur = conn.cursor()
+                cur.execute(sql, (context_id,))
+                rows = cur.fetchall()
+                cur.close()
+            else:
+                sql = f"SELECT token_id, pii_type, value_enc FROM {self.table} WHERE tenant_id = %s"
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(sql, (context_id,))
+                        rows = cur.fetchall()
+            mappings: list[TokenMapping] = []
+            for token_id, pii_type, val_bytes in rows:
+                if isinstance(val_bytes, memoryview):
+                    val_bytes = val_bytes.tobytes()
+                if isinstance(val_bytes, bytes):
+                    value = val_bytes.decode("utf-8")
+                else:
+                    value = str(val_bytes)
+                mappings.append(TokenMapping(token=token_id, type=pii_type, value=value))
+            return mappings
+        except Exception as e:
+            raise TokenVaultError(f"Failed to load mappings for {context_id}: {e}")
+        finally:
+            try:
+                if self._should_close(conn):
+                    conn.close()
+            except Exception:
+                pass
+
+    def clear_context(self, context_id: str) -> None:
+        conn = self._get_conn()
+        try:
+            if isinstance(conn, sqlite3.Connection):
+                sql = f"DELETE FROM {self.table} WHERE tenant_id = ?"
+                cur = conn.cursor()
+                cur.execute(sql, (context_id,))
+                conn.commit()
+                cur.close()
+            else:
+                sql = f"DELETE FROM {self.table} WHERE tenant_id = %s"
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(sql, (context_id,))
+        except Exception as e:
+            raise TokenVaultError(f"Failed to clear context {context_id}: {e}")
+        finally:
+            try:
+                if self._should_close(conn):
+                    conn.close()
             except Exception:
                 pass

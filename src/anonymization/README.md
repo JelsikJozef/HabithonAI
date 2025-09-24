@@ -3,6 +3,7 @@
 PII detection, pseudonymization, and de-anonymization toolkit.
 
 - Multiple detectors: regex (built-in), optional Microsoft Presidio
+- Deterministic anonymization via HMAC-SHA256 tokens (h:<kid>:<hex>)
 - Pseudonymize to robust tokens and store reversible mappings
 - De-anonymize text using stored mappings
 - File- and Postgres-backed token vaults
@@ -37,6 +38,15 @@ Python 3.10+ is required.
   - res = pseudonymize("Email alice@example.com", detectors, vault, ctx)
   - dean = deanonymize(res.pseudonymized_text, vault, ctx)
 
+- Deterministic anonymization (non-reversible)
+
+  - from anonymization.adapters.container import build_default
+  - from anonymization.adapters.crypto.crypto import Crypto
+  - from anonymization.domain.anonymizer import anonymize
+  - detectors, vault = build_default()
+  - crypto = Crypto()
+  - res = anonymize("Call +1 555 123 4567 or mail alice@example.com", detectors, crypto, vault, context_id="doc-1", tenant_id="acme", language="en")
+
 ## Workflow
 
 ```mermaid
@@ -46,16 +56,13 @@ flowchart TD
   B -->|presidio| D[PresidioDetector]
   C --> E[Merge entities]
   D --> E
-  E --> F[Pseudonymize spans]
-  F --> G[Token Vault]
+  E --> F1[Anonymize (HMAC hash)]
+  E --> F2[Pseudonymize (reversible token)]
+  F1 --> I[Anonymized text]
+  F2 --> G[Token Vault]
   G --> H[Save token<->value]
-  F --> I[Anonymized text]
   I --> J[LLM or API]
-  J --> K[Response with tokens]
-  K --> L[De-anonymize]
-  L --> M[Restored text]
-  F --> N[Crypto ops]
-  N --> O[Key Manager]
+  J --> K[Response]
 ```
 
 ## CLI
@@ -65,49 +72,24 @@ flowchart TD
   - anonymization-cli detect "Email alice@example.com"
   - anonymization-cli pseudonymize "Call +1 555-123-4567" --context demo
   - anonymization-cli deanonymize "{{PII:PHONE:1:xxxx}}" --context demo
+  - anonymization-cli anonymize "Contact alice@example.com" --context doc1 --tenant acme --lang en
 
 Outputs JSON.
-
-## API server
-
-- With [api] extra installed:
-
-  - uvicorn anonymization.presentation.api:app --app-dir src --reload
-
-Endpoints:
-
-- GET /health
-- POST /detect {text, language?}
-- POST /pseudonymize {text, context_id, language?}
-- POST /deanonymize {text, context_id}
 
 ## Configuration
 
 - Detectors:
-  - ANON_DETECTORS: comma list (regex,presidio). Default: regex.
+  - ANON_DETECTORS: regex|presidio (default: presidio, falls back to regex when unavailable)
   - ANON_PRESIDIO_LANGS: lang:model pairs, e.g. en:en_core_web_sm,es:es_core_news_sm
 
-- Token vault (file-based default):
-  - ANON_VAULT_DIR: directory path (default .anonymization_vault)
+- Token vault:
+  - FileTokenVault (default): ANON_VAULT_DIR directory path (default src/anonymization/.anonymization_vault)
+  - PostgresTokenVault: set ANON_POSTGRES_DSN (postgresql://user:pass@host/db). Table default: pii_tokens. Created automatically.
 
 - Keys (for crypto hashing/tokenization):
   - Set ANON_KEYSET as JSON:
     {"active_kid":"kidA","keys":{"kidA":"<base64-32B>","kidB":"<base64-32B>"}}
   - Rotation: switch active_kid; old keys remain available via get_all_hmac_keys.
-
-## Adapters
-
-- Detectors
-  - RegexDetector: emails, phones, IPv4, credit cards.
-  - PresidioDetector: uses Microsoft Presidio AnalyzerEngine (optional extra).
-
-- Token vaults
-  - FileTokenVault: JSON per context on disk.
-  - PostgresTokenVault: reversible mapping in PostgreSQL.
-
-- Crypto
-  - crypto.Crypto: mask/hash/tokenize using tenant-scoped HMAC subkeys from key_manager.
-  - key_manager: loads a versioned keyset, derives per-tenant subkeys deterministically.
 
 ## Postgres vault schema
 
@@ -131,15 +113,10 @@ Endpoints:
 ## Notes
 
 - Presidio is lazily imported; if not installed, regex detection still works.
-- Tokens look like {{PII:TYPE:N:abcd1234}} in pseudonymization flow; the vault stores token↔value pairs.
 - Crypto.hash returns h:<kid>:<hex> and Crypto.tokenize returns t:<kid>:<id> for stable, non-reversible identifiers.
 
 ## Tests
 
-- Unit tests are provided under tests/ (and packages/anonymization/tests for adapter specifics).
-- Run with:
-  - python -m unittest discover -v
-
-## License
-
-- Proprietary/internal (adjust as needed).
+- Unit tests under tests/unit cover anonymizer determinism.
+- Integration tests under tests/integration validate the Postgres adapter (DB-API via sqlite in CI). Provide ANON_POSTGRES_DSN to test against real Postgres locally.
+- End-to-end tests under tests/e2e cover preprocessing CLI anonymization (--anonymize-en).

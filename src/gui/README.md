@@ -70,6 +70,24 @@ Tabs
 - Jobs: placeholder for history and logs.
 - Settings: environment/session settings and preflight.
 
+## Anonymization tab
+
+Fields:
+- Language: Optional hint to detectors (e.g., en, sk, de).
+- Context ID: Required for pseudonymize/de-anonymize and deterministic anonymize; identifies the mapping set in the vault.
+- Tenant ID: Optional scope for deterministic anonymize; influences HMAC token derivation and helps separate domains.
+
+Actions:
+- Detect: Runs configured detectors and shows merged PII entities.
+- Pseudonymize: Replaces PII with robust tokens like `{{PII:TYPE:i:xxxx}}` and saves mappings to the vault.
+- De-anonymize: Restores original values using mappings from the vault for the given Context ID.
+- Deterministic anonymize: Replaces PII with deterministic HMAC tokens (h:<kid>:<hex>) using current keyset; saves mappings (token->value) for authorized restoration.
+
+Notes:
+- By default, detectors use Presidio if available; otherwise fall back to an offline regex detector. You can force regex with `ANON_DETECTORS=regex`.
+- File-based vault by default; override with `ANON_VAULT_DIR` or use Postgres by setting `ANON_POSTGRES_DSN`.
+- Keys for deterministic anonymize come from `ANON_KEYSET` JSON; a built-in test key is used if not provided. For production, configure a proper keyset.
+
 Service facade
 - gui.services.facade.GuiServices exposes small, stable methods used by views:
   - convert_plan(cfg) -> Plan

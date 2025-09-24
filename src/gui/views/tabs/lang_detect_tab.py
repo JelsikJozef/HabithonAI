@@ -13,11 +13,15 @@ from ..qt import (
     QTextEdit,
     QLabel,
     QSpinBox,
-    QToolButton,
-    QStyle,
     QCheckBox,
     QComboBox,
 )
+from ..ui_helpers import (
+    section_header,
+    create_field_label,
+    auto_expand_combo,
+    wrap_with_help,
+)  # updated imports
 
 from ...services.facade import GuiServices
 
@@ -31,7 +35,6 @@ class LanguageDetectTab(QWidget):
 
         vbox = QVBoxLayout(self)
 
-        # File selection
         form = QFormLayout()
         self.file_edit = QLineEdit()
         self.file_edit.setPlaceholderText(
@@ -42,23 +45,21 @@ class LanguageDetectTab(QWidget):
         file_row.addWidget(self.file_edit, 1)
         file_row.addWidget(pick_btn)
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Document:",
                 "Select a document to analyze. Supports Markdown, text, Word, PDF, Excel, Outlook, and image files.",
             ),
             file_row,
         )
 
-        # Language Detection Settings
-        lang_label = QLabel("Language Detection Settings")
-        lang_label.setStyleSheet("font-weight: bold; color: #2c5aa0; margin-top: 10px;")
-        form.addRow(lang_label)
+        # Language Detection Settings header
+        form.addRow(section_header("Language Detection Settings"))
 
         # Candidates
         self.candidates_edit = QLineEdit()
         self.candidates_edit.setPlaceholderText("e.g. sk,cs,de,en")
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Candidates:",
                 "Optional comma-separated list of language codes to limit detection to. Leave empty to detect from all supported languages.",
             ),
@@ -70,7 +71,7 @@ class LanguageDetectTab(QWidget):
         self.max_chars_sp.setRange(100, 50000)
         self.max_chars_sp.setValue(5000)
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Max chars:",
                 "Maximum number of characters to analyze from the document. Larger values give more accurate results but take longer.",
             ),
@@ -81,7 +82,7 @@ class LanguageDetectTab(QWidget):
         self.min_chars_sp.setRange(10, 1000)
         self.min_chars_sp.setValue(50)
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Min chars:",
                 "Minimum number of characters required before trusting detection results. Very short texts are unreliable.",
             ),
@@ -92,8 +93,9 @@ class LanguageDetectTab(QWidget):
         self.detection_mode = QComboBox()
         self.detection_mode.addItems(["Basic Detection", "Top-K Analysis", "Advanced Routing"])
         self.detection_mode.setCurrentText("Top-K Analysis")
+        auto_expand_combo(self.detection_mode)
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Detection mode:",
                 "Basic: single language result. Top-K: multiple candidates with scores. Advanced: full routing analysis with validation.",
             ),
@@ -105,17 +107,16 @@ class LanguageDetectTab(QWidget):
         self.topk_k.setRange(1, 10)
         self.topk_k.setValue(5)
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Top-K candidates:",
                 "Number of top language candidates to return with confidence scores.",
             ),
             self.topk_k,
         )
 
-        # Advanced routing controls (only shown when Advanced mode is selected)
-        self.routing_label = QLabel("Advanced Routing Analysis")
-        self.routing_label.setStyleSheet("font-weight: bold; color: #2c5aa0; margin-top: 10px;")
-        form.addRow(self.routing_label)
+        # Advanced routing controls header (only active in advanced mode)
+        self.routing_header = section_header("Advanced Routing Analysis")
+        form.addRow(self.routing_header)
 
         # Threshold controls
         self.tau_low = QSpinBox()
@@ -123,7 +124,7 @@ class LanguageDetectTab(QWidget):
         self.tau_low.setValue(70)
         self.tau_low.setSuffix("%")
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Low confidence threshold (τ_low):",
                 "Confidence threshold below which the system considers the detection unreliable and may trigger additional analysis.",
             ),
@@ -135,18 +136,18 @@ class LanguageDetectTab(QWidget):
         self.delta_close.setValue(5)
         self.delta_close.setSuffix("%")
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Close margin threshold (δ_close):",
                 "When top two language candidates are within this margin, the detection is considered ambiguous.",
             ),
             self.delta_close,
         )
 
-        # Translation validation controls (for advanced mode)
+        # Translation validation controls (advanced mode)
         self.enable_translation_test = QCheckBox("Enable translation quality test")
         self.enable_translation_test.setChecked(False)
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Translation test:",
                 "Perform a micro-translation test to validate language detection accuracy using English confidence and similarity analysis.",
             ),
@@ -158,7 +159,7 @@ class LanguageDetectTab(QWidget):
         self.tau_en.setValue(90)
         self.tau_en.setSuffix("%")
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "English confidence threshold (τ_en):",
                 "Minimum English confidence required for translation test validation.",
             ),
@@ -170,7 +171,7 @@ class LanguageDetectTab(QWidget):
         self.similarity_threshold.setValue(92)
         self.similarity_threshold.setSuffix("%")
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Similarity threshold:",
                 "Maximum similarity allowed between source and translation (to detect identity/poor translations).",
             ),
@@ -181,7 +182,7 @@ class LanguageDetectTab(QWidget):
         self.probe_slice.setRange(100, 2000)
         self.probe_slice.setValue(600)
         form.addRow(
-            self._create_label_with_help(
+            create_field_label(
                 "Test slice chars:",
                 "Number of characters to use for micro-translation quality tests.",
             ),
@@ -193,16 +194,16 @@ class LanguageDetectTab(QWidget):
         # Actions
         actions = QHBoxLayout()
         self.detect_btn = QPushButton("Analyze Language")
-        self.detect_btn.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px 16px; }"
+        actions.addWidget(
+            wrap_with_help(
+                self.detect_btn, "Run selected detection mode and display structured results."
+            )
         )
-        actions.addWidget(self.detect_btn)
         actions.addStretch(1)
         vbox.addLayout(actions)
 
         # Output
-        self.result_label = QLabel("Analysis Result:")
-        self.result_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        self.result_label = section_header("Analysis Result")
         self.output = QTextEdit()
         self.output.setReadOnly(True)
         self.output.setMinimumHeight(200)
@@ -218,65 +219,22 @@ class LanguageDetectTab(QWidget):
         # Initialize enabled/disabled state
         self._update_enabled_states()
 
-    def _create_label_with_help(self, text: str, tooltip: str) -> QWidget:
-        """Create a label with a help button that shows tooltip on hover."""
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
-
-        label = QLabel(text)
-        help_btn = QToolButton()
-        help_btn.setText("?")
-        help_btn.setToolTip(tooltip)
-        help_btn.setStyleSheet(
-            """
-            QToolButton {
-                background-color: #E3F2FD;
-                border: 1px solid #2196F3;
-                border-radius: 10px;
-                color: #1976D2;
-                font-weight: bold;
-                font-size: 10px;
-                min-width: 16px;
-                max-width: 16px;
-                min-height: 16px;
-                max-height: 16px;
-            }
-            QToolButton:hover {
-                background-color: #2196F3;
-                color: white;
-            }
-        """
-        )
-
-        layout.addWidget(label)
-        layout.addWidget(help_btn)
-        layout.addStretch(1)
-
-        return container
-
+    # --- State management -------------------------------------------------
     def _update_enabled_states(self) -> None:
-        """Update which controls are enabled based on current settings."""
         mode = self.detection_mode.currentText()
-
-        # Top-K controls enabled for Top-K Analysis and Advanced Routing
         topk_enabled = mode in ["Top-K Analysis", "Advanced Routing"]
         self.topk_k.setEnabled(topk_enabled)
-
-        # Advanced routing controls enabled only for Advanced Routing
         advanced_enabled = mode == "Advanced Routing"
-        self.routing_label.setEnabled(advanced_enabled)
+        self.routing_header.setEnabled(advanced_enabled)
         self.tau_low.setEnabled(advanced_enabled)
         self.delta_close.setEnabled(advanced_enabled)
         self.enable_translation_test.setEnabled(advanced_enabled)
-
-        # Translation test controls enabled when translation test is checked and advanced mode is on
         test_enabled = advanced_enabled and self.enable_translation_test.isChecked()
         self.tau_en.setEnabled(test_enabled)
         self.similarity_threshold.setEnabled(test_enabled)
         self.probe_slice.setEnabled(test_enabled)
 
+    # --- File selection ---------------------------------------------------
     def _browse_file(self) -> None:
         path, _flt = QFileDialog.getOpenFileName(
             self,
@@ -287,13 +245,12 @@ class LanguageDetectTab(QWidget):
         if path:
             self.file_edit.setText(path)
 
+    # --- Detection actions ------------------------------------------------
     def _on_detect(self) -> None:
         path = self.file_edit.text().strip()
         if not path:
             self.output.setPlainText("Please select a document to analyze.")
             return
-
-        # Prepare parameters
         cand_raw = self.candidates_edit.text().strip()
         candidates = (
             [s.strip().lower() for s in cand_raw.split(",") if s.strip()] if cand_raw else None
@@ -301,10 +258,8 @@ class LanguageDetectTab(QWidget):
         max_chars = int(self.max_chars_sp.value())
         min_chars = int(self.min_chars_sp.value())
         mode = self.detection_mode.currentText()
-
         try:
             if mode == "Basic Detection":
-                # Use simple detection
                 res: dict[str, Any] = self.svc.lang_detect_file(
                     path,
                     candidates=candidates,
@@ -312,9 +267,7 @@ class LanguageDetectTab(QWidget):
                     min_chars=min_chars,
                 )
                 self._display_basic_result(res)
-
             elif mode == "Top-K Analysis":
-                # Use top-k detection
                 res = self.svc.lang_detect_topk(
                     path,
                     k=int(self.topk_k.value()),
@@ -323,158 +276,78 @@ class LanguageDetectTab(QWidget):
                     min_chars=min_chars,
                 )
                 self._display_topk_result(res)
-
-            elif mode == "Advanced Routing":
-                # Use advanced routing analysis
-                routing_config = {
-                    "tau_low": float(self.tau_low.value()) / 100.0,
-                    "delta_close": float(self.delta_close.value()) / 100.0,
-                }
-
-                if self.enable_translation_test.isChecked():
-                    routing_config.update(
-                        {
-                            "tau_en": float(self.tau_en.value()) / 100.0,
-                            "similarity_noop_threshold": float(self.similarity_threshold.value())
-                            / 100.0,
-                            "probe": {"slice_chars": int(self.probe_slice.value())},
-                        }
-                    )
-
+            else:
                 res = self.svc.lang_detect_advanced_routing(
                     path,
                     k=int(self.topk_k.value()),
                     candidates=candidates,
                     max_chars=max_chars,
                     min_chars=min_chars,
-                    routing_config=routing_config,
+                    routing_config={
+                        "tau_low": self.tau_low.value() / 100.0,
+                        "delta_close": self.delta_close.value() / 100.0,
+                        "tau_en": self.tau_en.value() / 100.0,
+                        "similarity_noop_threshold": self.similarity_threshold.value() / 100.0,
+                    },
                     enable_translation_test=self.enable_translation_test.isChecked(),
                 )
                 self._display_advanced_result(res)
+        except Exception as e:  # pragma: no cover - runtime safety
+            self.output.setPlainText(f"Detection failed: {e}")
 
-        except Exception as e:
-            self.output.setPlainText(f"Analysis failed: {e}")
-
+    # --- Result formatting ------------------------------------------------
     def _display_basic_result(self, res: dict[str, Any]) -> None:
-        """Display basic language detection result."""
         if res.get("error"):
-            self.output.setPlainText(str(res.get("error")))
+            self.output.setPlainText(res["error"])
             return
-
         lines = [
-            "=== Basic Language Detection ===",
-            f"Language: {res.get('lang')}",
-            f"Confidence: {res.get('confidence'):.3f}"
-            if isinstance(res.get("confidence"), (int, float))
-            else f"Confidence: {res.get('confidence')}",
-            f"Engine: {res.get('engine')}",
-            f"Characters analyzed: {res.get('chars_used')}",
-            f"Path: {res.get('path')}",
+            "BASIC DETECTION:",
+            f"  file={res.get('path')}",
+            f"  lang={res.get('lang')} confidence={res.get('confidence'):.2f}",
+            f"  engine={res.get('engine')} chars_used={res.get('chars_used')}",
+            f"  log={res.get('log')}",
         ]
-        if res.get("log"):
-            lines.append(f"Log: {res.get('log')}")
         self.output.setPlainText("\n".join(lines))
 
     def _display_topk_result(self, res: dict[str, Any]) -> None:
-        """Display top-k language detection result."""
         if res.get("error"):
-            self.output.setPlainText(str(res.get("error")))
+            self.output.setPlainText(res["error"])
             return
-
+        topk = res.get("topk") or []
         lines = [
-            "=== Top-K Language Analysis ===",
-            f"Primary Language: {res.get('lang_code')}",
-            f"Primary Confidence: {res.get('confidence'):.3f}"
-            if isinstance(res.get("confidence"), (int, float))
-            else f"Primary Confidence: {res.get('confidence')}",
-            "",
-            "Top Candidates:",
+            "TOP-K DETECTION:",
+            f"  file={res.get('path')}",
+            f"  primary={res.get('lang_code')} conf={res.get('confidence'):.2f}",
+            f"  chars_used={res.get('chars_used')} log={res.get('log')}",
+            "  candidates:",
         ]
-
-        topk = res.get("topk", [])
-        for i, candidate in enumerate(topk, 1):
-            score = candidate.get("score", 0)
+        for c in topk:
             lines.append(
-                f"  {i}. {candidate.get('code')} - {candidate.get('name', 'Unknown')} ({score:.3f})"
+                f"    - {c.get('lang')} score={c.get('score'):.4f} conf={c.get('confidence'):.4f} flags={c.get('flags')}"
             )
-
-        flags = res.get("flags", {})
-        if flags:
-            lines.extend(
-                [
-                    "",
-                    "Detection Flags:",
-                    f"  Low confidence: {'Yes' if flags.get('low_confidence') else 'No'}",
-                    f"  Close top-2: {'Yes' if flags.get('close_top2') else 'No'}",
-                ]
-            )
-
-        lines.extend(
-            [
-                "",
-                f"Characters analyzed: {res.get('chars_used')}",
-                f"Path: {res.get('path')}",
-            ]
-        )
-        if res.get("log"):
-            lines.append(f"Log: {res.get('log')}")
-
         self.output.setPlainText("\n".join(lines))
 
     def _display_advanced_result(self, res: dict[str, Any]) -> None:
-        """Display advanced routing analysis result."""
         if res.get("error"):
-            self.output.setPlainText(str(res.get("error")))
+            self.output.setPlainText(res["error"])
             return
-
+        topk = res.get("topk") or []
+        routing = res.get("routing") or {}
         lines = [
-            "=== Advanced Routing Analysis ===",
-            f"Primary Language: {res.get('lang_code')}",
-            f"Primary Confidence: {res.get('confidence'):.3f}"
-            if isinstance(res.get("confidence"), (int, float))
-            else f"Primary Confidence: {res.get('confidence')}",
-            "",
-            "Top Candidates:",
+            "ADVANCED ROUTING ANALYSIS:",
+            f"  file={res.get('path')}",
+            f"  primary={res.get('lang_code')} conf={res.get('confidence'):.2f} chars_used={res.get('chars_used')}",
+            f"  routing probe_triggered={routing.get('probe_triggered')} selected_src={routing.get('selected_src')} reason={routing.get('probe_reason')}",
         ]
-
-        topk = res.get("topk", [])
-        for i, candidate in enumerate(topk, 1):
-            score = candidate.get("score", 0)
+        trtest = routing.get("translation_test")
+        if isinstance(trtest, dict):
             lines.append(
-                f"  {i}. {candidate.get('code')} - {candidate.get('name', 'Unknown')} ({score:.3f})"
+                f"  translation_test en_conf={trtest.get('en_confidence'):.2f} sim={trtest.get('similarity'):.2f} passed={trtest.get('passed')}"
             )
-
-        # Routing analysis
-        routing = res.get("routing", {})
-        if routing:
-            lines.extend(
-                [
-                    "",
-                    "Routing Analysis:",
-                    f"  Probe triggered: {'Yes' if routing.get('probe_triggered') else 'No'}",
-                    f"  Selected source: {routing.get('selected_src', 'N/A')}",
-                ]
+        lines.append("  candidates:")
+        for c in topk:
+            lines.append(
+                f"    - {c.get('lang')} score={c.get('score'):.4f} conf={c.get('confidence'):.4f} flags={c.get('flags')}"
             )
-            if "probe_reason" in routing:
-                lines.append(f"  Probe reason: {routing.get('probe_reason')}")
-            if "translation_test" in routing:
-                tt = routing.get("translation_test") or {}
-                lines.extend(
-                    [
-                        f"  EN confidence: {tt.get('en_confidence')}",
-                        f"  Similarity: {tt.get('similarity')}",
-                        f"  Passed: {'Yes' if tt.get('passed') else 'No'}",
-                    ]
-                )
-
-        lines.extend(
-            [
-                "",
-                f"Characters analyzed: {res.get('chars_used')}",
-                f"Path: {res.get('path')}",
-            ]
-        )
-        if res.get("log"):
-            lines.append(f"Log: {res.get('log')}")
-
+        lines.append(f"  log={res.get('log')}")
         self.output.setPlainText("\n".join(lines))

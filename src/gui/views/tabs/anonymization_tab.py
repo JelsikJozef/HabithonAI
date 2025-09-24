@@ -14,6 +14,7 @@ from ..qt import (
 
 from ...services.facade import GuiServices
 from shared.hashing import document_fingerprint  # stable context id from file
+from ..ui_helpers import auto_expand_combo, wrap_with_help, create_field_label  # new imports
 
 
 class AnonymizationTab(QWidget):
@@ -47,13 +48,29 @@ class AnonymizationTab(QWidget):
         self.lang_combo = QComboBox()
         self.lang_combo.setEditable(True)
         self.lang_combo.addItems(["", "en", "sk", "de", "cs", "pl", "hu"])  # quick presets
+        auto_expand_combo(self.lang_combo)
         self.ctx_edit = QLineEdit()
         self.ctx_edit.setPlaceholderText("Context ID (required for pseudo/deanonymize)")
         self.tenant_edit = QLineEdit()
         self.tenant_edit.setPlaceholderText("Tenant ID (optional; scopes deterministic anonymize)")
-        form.addRow("Language:", self.lang_combo)
-        form.addRow("Context ID:", self.ctx_edit)
-        form.addRow("Tenant ID:", self.tenant_edit)
+        form.addRow(
+            create_field_label(
+                "Language:", "Optional language hint to improve detector precision."
+            ),
+            self.lang_combo,
+        )
+        form.addRow(
+            create_field_label(
+                "Context ID:", "Identifier to namespace token mappings (per document)."
+            ),
+            self.ctx_edit,
+        )
+        form.addRow(
+            create_field_label(
+                "Tenant ID:", "Scopes deterministic hashing; different tenant -> different tokens."
+            ),
+            self.tenant_edit,
+        )
         vbox.addLayout(form)
 
         self.input_text = QTextEdit()
@@ -65,15 +82,29 @@ class AnonymizationTab(QWidget):
         # Actions
         actions = QHBoxLayout()
         self.detect_btn = QPushButton("Detect")
+        self.detect_btn.setToolTip("Run PII detectors and show merged entities.")
         self.pseudo_btn = QPushButton("Pseudonymize")
+        self.pseudo_btn.setToolTip(
+            "Replace PII with random structured tokens (not stable across files)."
+        )
         self.de_btn = QPushButton("De-anonymize")
+        self.de_btn.setToolTip(
+            "Restore original text from previously saved mappings for the context."
+        )
         self.anonym_btn = QPushButton("Deterministic anonymize")
+        self.anonym_btn.setToolTip(
+            "Replace PII with stable HMAC tokens (same value -> same token)."
+        )
         self.presidio_btn = QPushButton("Check Presidio")
-        actions.addWidget(self.detect_btn)
-        actions.addWidget(self.pseudo_btn)
-        actions.addWidget(self.de_btn)
-        actions.addWidget(self.anonym_btn)
-        actions.addWidget(self.presidio_btn)
+        self.presidio_btn.setToolTip("Inspect Presidio / spaCy readiness and model availability.")
+        for w, tip in [
+            (self.detect_btn, None),
+            (self.pseudo_btn, None),
+            (self.de_btn, None),
+            (self.anonym_btn, None),
+            (self.presidio_btn, None),
+        ]:
+            actions.addWidget(wrap_with_help(w, w.toolTip() or "Action"))
         actions.addStretch(1)
         vbox.addLayout(actions)
 

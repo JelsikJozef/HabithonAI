@@ -16,6 +16,7 @@ from ..qt import (
     QComboBox,
     QLabel,
 )
+from ..ui_helpers import section_header, auto_expand_combo, wrap_with_help  # updated import
 
 from ...services.facade import GuiServices
 
@@ -53,6 +54,10 @@ class ConvertTab(QWidget):
         self.overwrite_cb.setToolTip(
             "If checked, existing outputs will be overwritten. If unchecked, they are skipped."
         )
+        form.addRow(wrap_with_help(self.recurse_cb, "Scan subdirectories recursively."))
+        form.addRow(
+            wrap_with_help(self.overwrite_cb, "Overwrite existing outputs instead of skipping.")
+        )
 
         self.workers_sp = QSpinBox()
         self.workers_sp.setRange(1, 64)
@@ -64,11 +69,12 @@ class ConvertTab(QWidget):
         self.log_level = QComboBox()
         self.log_level.addItems(["ERROR", "WARNING", "INFO", "DEBUG"])
         self.log_level.setToolTip("Verbosity of logs written during operations.")
-        form.addRow(self.recurse_cb)
-        form.addRow(self.overwrite_cb)
         form.addRow("Workers:", self.workers_sp)
         form.addRow("Progress:", self.progress_mode)
         form.addRow("Log level:", self.log_level)
+        # expand combos
+        for _c in (self.progress_mode, self.log_level):
+            auto_expand_combo(_c)
 
         vbox.addLayout(form)
 
@@ -80,10 +86,14 @@ class ConvertTab(QWidget):
             "Perform document-to-Markdown conversion into the Output folder."
         )
         self.translate_cb = QCheckBox("Translate to English")
-        self.translate_cb.setChecked(False)
-        self.translate_cb.setToolTip("Create or refresh English variants of Markdown files.")
-        run_opts.addRow(self.convert_cb)
-        run_opts.addRow(self.translate_cb)
+        run_opts.addRow(
+            wrap_with_help(self.convert_cb, "Convert supported documents to Markdown (.md).")
+        )
+        run_opts.addRow(
+            wrap_with_help(
+                self.translate_cb, "Translate Markdown to English using selected engine."
+            )
+        )
         vbox.addLayout(run_opts)
 
         # Translation options (enabled only when Translate is selected)
@@ -100,6 +110,7 @@ class ConvertTab(QWidget):
         )
         tr_form.addRow(self.make_en_cb)
         tr_form.addRow("Translator:", self.translator_combo)
+        auto_expand_combo(self.translator_combo)
 
         # LangID controls for translation routing
         self.lang_cands = QLineEdit()
@@ -119,14 +130,21 @@ class ConvertTab(QWidget):
 
         # Advanced routing controls (new)
         routing_group = QFormLayout()
-        routing_label = QLabel("Advanced Routing (Model-Only)")
-        routing_label.setStyleSheet("font-weight: bold; color: #2c5aa0;")
+        # routing_label = QLabel("Advanced Routing (Model-Only)")  # replaced
+        # routing_label.setStyleSheet("font-weight: bold; color: #2c5aa0;")
+        routing_label = section_header("Advanced Routing (Model-Only)")
         tr_form.addRow(routing_label)
 
         self.enable_routing_cb = QCheckBox("Enable advanced routing")
         self.enable_routing_cb.setChecked(True)
         self.enable_routing_cb.setToolTip(
             "Use model-only routing with probe selection, validation, and retry logic"
+        )
+        tr_form.addRow(
+            wrap_with_help(
+                self.enable_routing_cb,
+                "Enable dynamic probe & retry logic for translation routing.",
+            )
         )
 
         # Threshold controls
@@ -199,8 +217,12 @@ class ConvertTab(QWidget):
         self.run_btn.setToolTip(
             "Run selected actions in order: Convert (if checked) then Translate (if checked)."
         )
-        actions.addWidget(self.plan_btn)
-        actions.addWidget(self.run_btn)
+        actions.addWidget(
+            wrap_with_help(self.plan_btn, "Dry-run: show counts of convertible files.")
+        )
+        actions.addWidget(
+            wrap_with_help(self.run_btn, "Execute selected stages: Convert and/or Translate.")
+        )
         actions.addStretch(1)
         vbox.addLayout(actions)
 

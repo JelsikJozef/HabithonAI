@@ -27,6 +27,8 @@ from ..qt import (
     QTextEdit,
     QLabel,
 )
+from ..ui_helpers import create_info_icon  # new helper import
+from ..ui_helpers import create_field_label, auto_expand_combo, wrap_with_help  # added
 
 from ...services.facade import GuiServices
 
@@ -65,25 +67,35 @@ class AnonBatchTab(QWidget):
             "Both modes store token->original mappings in the vault; restoration needs the per-file context id. Tenant ID only impacts deterministic hashing."
         )
         self.mode_combo.setToolTip(mode_help)
-        # Optional info glyph next to the combo for quick hover
+        auto_expand_combo(self.mode_combo)
         mode_row = QHBoxLayout()
         mode_row.addWidget(self.mode_combo, 1)
-        info_lbl = QLabel("ⓘ")
-        info_lbl.setToolTip(mode_help)
-        info_lbl.setStyleSheet("color: #2c5aa0; font-weight: bold; padding-left:4px;")
+        info_lbl = create_info_icon(mode_help)  # replaced custom label
         mode_row.addWidget(info_lbl, 0)
         form.addRow("Mode:", mode_row)
 
         self.lang_edit = QLineEdit()
         self.lang_edit.setPlaceholderText("Optional language hint (e.g. en, de, sk)")
-        form.addRow("Language hint:", self.lang_edit)
+        form.addRow(
+            create_field_label(
+                "Language hint:",
+                "Optional ISO language hint to improve detector precision and reduce false positives.",
+            ),
+            self.lang_edit,
+        )
 
         self.tenant_edit = QLineEdit()
         self.tenant_edit.setPlaceholderText("Tenant ID (deterministic mode only)")
         self.tenant_edit.setToolTip(
             "Optional namespace used when hashing in deterministic mode. Different tenant IDs produce different tokens for the same value. Ignored in pseudonymize mode."
         )
-        form.addRow("Tenant ID:", self.tenant_edit)
+        form.addRow(
+            create_field_label(
+                "Tenant ID:",
+                "Scopes deterministic hashing; different tenant -> different token for same PII.",
+            ),
+            self.tenant_edit,
+        )
 
         self.recurse_cb = QCheckBox("Recurse subfolders")
         self.recurse_cb.setChecked(True)
@@ -104,8 +116,10 @@ class AnonBatchTab(QWidget):
         self.run_btn = QPushButton("Run")
         self.plan_btn.setToolTip("Dry summary: counts of files that would be processed / skipped.")
         self.run_btn.setToolTip("Execute batch anonymization.")
-        actions.addWidget(self.plan_btn)
-        actions.addWidget(self.run_btn)
+        actions.addWidget(wrap_with_help(self.plan_btn, "Dry summary of files to process or skip."))
+        actions.addWidget(
+            wrap_with_help(self.run_btn, "Execute batch anonymization (writes output files).")
+        )
         actions.addStretch(1)
         vbox.addLayout(actions)
 

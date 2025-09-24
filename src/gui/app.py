@@ -11,10 +11,11 @@ Assumptions:
 - The project is executed with `src` on PYTHONPATH (e.g., via IDE or `PYTHONPATH=src`).
 """
 
-import sys
+import sys, os
 from .views.qt import QApplication, QT_AVAILABLE
 
 from .views.main_window import MainWindow
+from .views.theme import apply_theme  # unified theme
 
 
 def main() -> int:
@@ -31,6 +32,13 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Habithon GUI")
     app.setOrganizationName("HabithonAI")
+
+    # Apply theme (auto-detect unless overridden by HABITHON_GUI_THEME=light|dark)
+    forced = os.environ.get("HABITHON_GUI_THEME")
+    if forced not in {None, "light", "dark"}:
+        forced = None
+    apply_theme(app, force=forced)
+
     win = MainWindow()
     win.show()
     return app.exec()

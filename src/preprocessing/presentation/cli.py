@@ -326,6 +326,35 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Skip convert phase and translate Markdown under --src",
     )
 
+    # Anonymization of English variant
+    anon = parser.add_argument_group("Anonymization (English variant)")
+    anon.add_argument(
+        "--anonymize-en",
+        action="store_true",
+        help=(
+            "After creating English variants, also write anonymized copies under out/hashed_documents "
+            "with the _anon.md suffix"
+        ),
+    )
+    anon.add_argument(
+        "--anon-tenant",
+        default=None,
+        help="Optional tenant identifier to scope hashing tokens (default: none)",
+    )
+
+    # Metadata + Vector store
+    meta = parser.add_argument_group("Metadata & Vector store")
+    meta.add_argument(
+        "--with-metadata",
+        action="store_true",
+        help="Generate summary+tags metadata from anonymized English content",
+    )
+    meta.add_argument(
+        "--vector-store",
+        action="store_true",
+        help="Persist records into a vector store (local JSONL placeholder by default)",
+    )
+
     diag = parser.add_argument_group("Logging & diagnostics")
     diag.add_argument(
         "--log-level",
@@ -342,7 +371,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     diag.add_argument(
         "--report",
         default=None,
-        help="Optional path to write a JSON run report with per-file outcomes",
+        help="Optional path to write a JSON run report",
     )
     # New: optional log file path
     diag.add_argument(
@@ -809,6 +838,10 @@ def _enumerate_md_originals_from_dir(src_dir: Path) -> list[Path]:
                 md_paths.append((d / name).resolve())
     md_paths.sort(key=lambda x: str(x))
     return md_paths
+
+
+def _enumerate_md_under(root: Path) -> list[Path]:
+    return _enumerate_md_originals_from_dir(root)
 
 
 def _try_autobuild_ct2_model(settings: dict) -> bool:
@@ -1396,6 +1429,269 @@ def _run_translation_phase(
     return exit_override, report_section
 
 
+def _run_anonymize_phase(
+    ns: argparse.Namespace,
+    cfg: EffectiveConfig,
+    *,
+    en_root: Path,
+) -> tuple[int, dict | None]:
+    if not getattr(ns, "anonymize_en", False):
+        return -1, None
+    try:
+        # App-layer use-case and storage adapter
+        from ..app.anonymize import anonymize_translated_document as _anon_usecase  # type: ignore
+        from ..adapters.storage.anonymized_storage import (  # type: ignore
+            AnonymizedFileStorage as _Storage,
+        )
+    except Exception as e:
+        logging.error("Anonymization components unavailable: %s", e)
+        return 3, {"error": f"Anonymization components unavailable: {e}"}
+
+    tenant_id = getattr(ns, "anon_tenant", None)
+
+    # Enumerate English Markdown and prepare output storage
+    en_root = en_root.resolve()
+    if not en_root.exists():
+        logging.warning("English root not found: %s", str(en_root))
+        return 0, {"docs_total": 0, "created": 0, "failed": 0, "results": []}
+    storage = _Storage(cfg.out)
+
+    md_paths = _enumerate_md_under(en_root)
+    results: list[dict[str, Any]] = []
+    created = 0
+    failed = 0
+    for p in md_paths:
+        try:
+            rel = p.resolve().relative_to(en_root)
+        except Exception:
+            rel = p.name
+        # Stable document id for context grouping
+        doc_rel = rel.as_posix() if isinstance(rel, Path) else str(rel)
+        document_id = f"md::{doc_rel}"
+        try:
+            # Run use-case (pure)
+            res = _anon_usecase(document_id, p, tenant_id=tenant_id, language="en")
+            # Persist anonymized copy
+            if not cfg.dry_run:
+                dst = storage.write(p, res.anonymized_text)
+                # Also persist mappings sidecar for offline de-anonymization
+                try:
+                    sidecar = Path(str(dst) + ".map.json")
+                    sidecar.write_text(
+                        json.dumps(
+                            {"context_id": res.context_id or document_id, "mappings": res.mappings},
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                        newline="\n",
+                    )
+                except Exception as e:
+                    logging.warning("Failed to write mapping sidecar for %s: %s", str(dst), e)
+            else:
+                dst = storage.compute_target_path(p)
+            created += 1
+            logging.info(
+                "Anonymizing %s -> %s",
+                Path(p).name,
+                Path(dst).name,
+            )
+            results.append(
+                {
+                    "status": "ok",
+                    "src": str(p),
+                    "dst": str(dst),
+                    "mappings": len(res.mappings),
+                }
+            )
+        except Exception as e:
+            failed += 1
+            results.append({"status": "failed", "src": str(p), "error": str(e)})
+
+    section = {
+        "docs_total": len(md_paths),
+        "created": created,
+        "failed": failed,
+        "results": results,
+        "out_root": str(storage.hashed_root.resolve()),
+    }
+    # Exit override only when all failed and there were docs
+    exit_override = 1 if failed and failed == len(md_paths) else -1
+    return exit_override, section
+
+
+def _run_metadata_and_vector_phase(
+    ns: argparse.Namespace,
+    cfg: EffectiveConfig,
+    *,
+    hashed_root: Path,
+) -> tuple[int, dict | None]:
+    if not (getattr(ns, "with_metadata", False) or getattr(ns, "vector_store", False)):
+        return -1, None
+    try:
+        from ..adapters.storage.anonymized_storage import AnonymizedFileStorage as _Storage  # type: ignore
+    except Exception as e:
+        logging.error("Storage adapter unavailable: %s", e)
+        return 3, {"error": f"Storage adapter unavailable: {e}"}
+
+    # Simple offline metadata generator
+    class _SimpleMetadataGen:
+        STOP = {
+            "the",
+            "and",
+            "for",
+            "with",
+            "that",
+            "this",
+            "from",
+            "have",
+            "are",
+            "not",
+            "you",
+            "your",
+            "has",
+            "was",
+            "but",
+            "his",
+            "her",
+            "its",
+            "our",
+            "their",
+        }
+
+        def generate(self, document_text: str) -> dict:
+            txt = (document_text or "").strip()
+            # Summary: first non-empty line (max 200 chars)
+            first_line = next((l.strip() for l in txt.splitlines() if l.strip()), "")
+            summary = (first_line[:200]).strip()
+            # Tags: top distinct words
+            import re
+
+            words = [w.lower() for w in re.findall(r"[A-Za-z]{3,}", txt)]
+            freq: dict[str, int] = {}
+            for w in words:
+                if w in self.STOP:
+                    continue
+                freq[w] = freq.get(w, 0) + 1
+            tags = [w for w, _c in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:8]]
+            return {"summary": summary, "tags": tags}
+
+    storage = _Storage(cfg.out)
+    hashed_root = hashed_root.resolve()
+    if not hashed_root.exists():
+        logging.warning("Anonymized root not found: %s", str(hashed_root))
+        return 0, {"docs_total": 0, "processed": 0, "failed": 0, "results": []}
+
+    # Enumerate anonymized markdown files
+    anon_paths: list[Path] = []
+    for dp, _dns, fns in __import__("os").walk(hashed_root):
+        d = Path(dp)
+        for name in fns:
+            if name.lower().endswith("_anon.md"):
+                anon_paths.append((d / name).resolve())
+    anon_paths.sort(key=lambda p: str(p))
+
+    results: list[dict[str, Any]] = []
+    processed = 0
+    failed = 0
+    gen = _SimpleMetadataGen()
+
+    # Prepare vector store JSONL path
+    vs_dir = cfg.out / "vector_store"
+    vs_dir.mkdir(parents=True, exist_ok=True)
+    vs_jsonl = vs_dir / "records.jsonl"
+
+    for a in anon_paths:
+        try:
+            # Derive document_id from English relative path
+            en_path = storage.resolve_en_path(a)
+            try:
+                rel = en_path.resolve().relative_to((cfg.out / "en").resolve()).as_posix()
+            except Exception:
+                rel = en_path.name
+            document_id = f"md::{rel}"
+
+            text = _load_md_text(a)
+            metadata: dict[str, Any] | None = None
+            if getattr(ns, "with_metadata", False):
+                logging.info("Generating metadata for %s", a.name)
+                metadata = gen.generate(text)
+                # Write metadata sidecar next to anonymized file
+                try:
+                    meta_sidecar = Path(str(a) + ".meta.json")
+                    meta_sidecar.write_text(
+                        json.dumps(metadata, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                        newline="\n",
+                    )
+                except Exception as e:
+                    logging.warning("Failed to write metadata sidecar for %s: %s", str(a), e)
+
+            # De-anonymize using mapping sidecar
+            restored_text = text
+            try:
+                sidecar = Path(str(a) + ".map.json")
+                if sidecar.exists():
+                    data = json.loads(sidecar.read_text(encoding="utf-8"))
+                    maps = data.get("mappings") or []
+                    # longest-first replacement
+                    pairs: list[tuple[str, str]] = []
+                    for m in maps:
+                        tok = m.get("token")
+                        val = m.get("value")
+                        if tok and val:
+                            pairs.append((str(tok), str(val)))
+                    pairs.sort(key=lambda t: len(t[0]), reverse=True)
+                    out = text
+                    for tok, val in pairs:
+                        out = out.replace(tok, val)
+                    restored_text = out
+                else:
+                    logging.warning(
+                        "Mapping sidecar missing for %s; skipping de-anonymization", a.name
+                    )
+            except Exception as e:
+                logging.warning("De-anonymization failed for %s: %s", a.name, e)
+
+            # Vector store persistence (JSONL placeholder)
+            if getattr(ns, "vector_store", False):
+                logging.info("Storing into vector store: %s", document_id)
+                rec = {
+                    "document_id": document_id,
+                    "path_anonymized": str(a),
+                    "path_english": str(en_path),
+                    "metadata": metadata or {},
+                    "anonymized_preview": (text[:200] or ""),
+                    "restored_preview": (restored_text[:200] or ""),
+                }
+                # Append one line JSON
+                with vs_jsonl.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+            processed += 1
+            results.append(
+                {
+                    "status": "ok",
+                    "doc_id": document_id,
+                    "anon": str(a),
+                    "en": str(en_path),
+                }
+            )
+        except Exception as e:
+            failed += 1
+            results.append({"status": "failed", "anon": str(a), "error": str(e)})
+
+    section = {
+        "docs_total": len(anon_paths),
+        "processed": processed,
+        "failed": failed,
+        "results": results,
+        "vector_store_path": str(vs_jsonl),
+    }
+    exit_override = 1 if failed and failed == len(anon_paths) else -1
+    return exit_override, section
+
+
 # ----- Public entry point -----
 
 
@@ -1462,6 +1758,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Optional translation phase
     exit_override, translation_section = _run_translation_phase(ns, cfg, convert_code, results)
 
+    # Optional anonymization phase over out/en
+    anon_exit, anonym_section = _run_anonymize_phase(ns, cfg, en_root=cfg.out / "en")
+    if anon_exit in (0, 1, 2, 3):
+        # Prefer more severe exit code
+        if anon_exit > (exit_override if exit_override in (0, 1, 2, 3) else -1):
+            exit_override = anon_exit
+
+    # Optional metadata + vector phase over out/hashed_documents
+    meta_exit, meta_section = _run_metadata_and_vector_phase(
+        ns, cfg, hashed_root=cfg.out / "hashed_documents"
+    )
+    if meta_exit in (0, 1, 2, 3):
+        if meta_exit > (exit_override if exit_override in (0, 1, 2, 3) else -1):
+            exit_override = meta_exit
+
     # Optional JSON run report
     if cfg.report:
         try:
@@ -1473,6 +1784,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
             if translation_section is not None:
                 payload["translation"] = translation_section
+            if anonym_section is not None:
+                payload["anonymization"] = anonym_section
+            if meta_section is not None:
+                payload["metadata_vector"] = meta_section
             with cfg.report.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
             logging.debug("Wrote report to %s", str(cfg.report))

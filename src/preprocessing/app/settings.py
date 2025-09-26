@@ -139,6 +139,13 @@ from __future__ import annotations
 
 import os
 import re
+
+# Default exclude patterns to avoid non-doc artifacts
+_DEFAULT_EXCLUDE_GLOBS: tuple[str, ...] = (
+    "**/.DS_Store",  # macOS Finder metadata
+    "**/._*",  # AppleDouble resource forks
+    "**/~$*",  # MS Office temp files (DOCX/XLSX)
+)
 from collections.abc import Iterable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -469,7 +476,7 @@ class Settings:
         ".jpeg",
         ".msg",
     )
-    exclude_glob: tuple[str, ...] = tuple()
+    exclude_glob: tuple[str, ...] = _DEFAULT_EXCLUDE_GLOBS
     max_files: int | None = None
 
     # Encoding / Serializer
@@ -604,7 +611,7 @@ def _build_from_mapping(
         # selection
         "recurse": True,
         "include_ext": (".docx", ".xlsx", ".pdf", ".jpg", ".jpeg", ".msg"),
-        "exclude_glob": tuple(),
+        "exclude_glob": _DEFAULT_EXCLUDE_GLOBS,
         "max_files": None,
         # encoding/serializer
         "normalize_eol": "lf",

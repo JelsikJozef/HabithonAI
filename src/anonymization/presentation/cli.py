@@ -2,14 +2,24 @@ import argparse
 import json
 
 from ..adapters.container import build_default
+from ..adapters.crypto.crypto import Crypto
 from ..app.denomize import deanonymize
 from ..app.detect import detect_all
 from ..app.pseudonymize import pseudonymize
+from ..domain.anonymizer import anonymize as domain_anonymize
 
 
 def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Anonymization CLI")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_anonym = sub.add_parser(
+        "anonymize", help="Deterministic anonymize text with hash tokens and store mappings"
+    )
+    p_anonym.add_argument("text", help="Input text")
+    p_anonym.add_argument("--context", required=True, help="Context ID for token mappings")
+    p_anonym.add_argument("--tenant", dest="tenant_id", help="Tenant ID for hashing", default=None)
+    p_anonym.add_argument("--lang", dest="language", help="Language code", default=None)
 
     p_detect = sub.add_parser("detect", help="Detect PII in text")
     p_detect.add_argument("text", help="Input text")
@@ -59,6 +69,28 @@ def main(argv: list[str] | None = None):
                     "anonymized_text": res.anonymized_text,
                     "restored_text": res.restored_text,
                     "mappings_used": [m.__dict__ for m in res.mappings_used],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    elif args.cmd == "anonymize":
+        crypto = Crypto()
+        res = domain_anonymize(
+            args.text,
+            detectors,
+            crypto,
+            vault,
+            context_id=args.context,
+            tenant_id=args.tenant_id,
+            language=args.language,
+        )
+        print(
+            json.dumps(
+                {
+                    "original_text": res.original_text,
+                    "anonymized_text": res.pseudonymized_text,
+                    "mappings": [m.__dict__ for m in res.mappings],
                 },
                 ensure_ascii=False,
                 indent=2,

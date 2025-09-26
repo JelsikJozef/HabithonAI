@@ -13,6 +13,8 @@ from anonymization.adapters.container import build_default
 from anonymization.app.detect import detect_all
 from anonymization.app.pseudonymize import pseudonymize
 from anonymization.app.denomize import deanonymize
+from anonymization.adapters.crypto.crypto import Crypto
+from anonymization.domain.anonymizer import anonymize as domain_anonymize
 
 
 # --- Small utility: write JSON diagnostics to outputs/logs ---
@@ -123,11 +125,10 @@ class GuiServices:
 
         # Advanced routing overrides from cfg (new)
         routing = dict(cfg.get("routing", {})) if isinstance(cfg.get("routing"), Mapping) else {}
+        original_env = {}
         if routing:
             # Add routing environment variables to pass settings to the CLI
             import os
-
-            original_env = {}
 
             # Set routing environment variables
             tau_low = routing.get("tau_low")
@@ -748,31 +749,445 @@ class GuiServices:
             "log": log_path,
         }
 
-    # --- Anonymization ---
     def anon_build(self):
         return build_default()
 
+    def _detectors_meta(self, detectors: list[Any]) -> list[dict[str, Any]]:
+        """Return lightweight metadata about configured detectors for display.
+
+        Attempts to extract supported languages / fallback info for PresidioDetector, and
+        provides a stable name for others.
+        """
+        out: list[dict[str, Any]] = []
+        for d in detectors:
+            meta: dict[str, Any] = {"name": getattr(d, "name", d.__class__.__name__.lower())}
+            # Presidio specifics
+            if meta["name"] == "presidio":
+                # These attrs are internal; guard with getattr
+                meta["supported_languages"] = list(getattr(d, "_supported_langs", []) or [])
+                meta["fallback_language"] = getattr(d, "_fallback_lang", None)
+                init_error = getattr(d, "_init_error", None)
+                if init_error:
+                    meta["init_error"] = str(init_error)
+                meta["regex_fallback_enabled"] = not bool(
+                    getattr(getattr(d, "settings", None), "disable_regex_fallback", False)
+                )
+            elif meta["name"] == "regex":
+                meta["patterns"] = ["EMAIL", "PHONE"]  # kept in sync with RegexDetector docstring
+            out.append(meta)
+        return out
+
     def anon_detect(self, text: str, language: str | None = None) -> dict[str, Any]:
         detectors, _ = build_default()
+        meta = self._detectors_meta(detectors)
         r = detect_all(text, detectors, language=language)
-        return {"text": r.text, "entities": [e.__dict__ for e in r.entities]}
+        entities = [e.__dict__ for e in r.entities]
+        # quick per-detector counts
+        counts: dict[str, int] = {}
+        for e in entities:
+            det = e.get("detector") or "?"
+            counts[det] = counts.get(det, 0) + 1
+        return {
+            "text": r.text,
+            "entities": entities,
+            "detectors": meta,
+            "detector_counts": counts,
+            "language_hint": language,
+        }
 
     def anon_pseudonymize(
         self, text: str, context_id: str, language: str | None = None
     ) -> dict[str, Any]:
         detectors, vault = build_default()
+        meta = self._detectors_meta(detectors)
         r = pseudonymize(text, detectors, vault, context_id=context_id, language=language)
+        mappings = [m.__dict__ for m in r.mappings]
+        # mapping stats
+        by_type: dict[str, int] = {}
+        for m in mappings:
+            t = m.get("type") or "?"
+            by_type[t] = by_type.get(t, 0) + 1
         return {
             "original_text": r.original_text,
             "pseudonymized_text": r.pseudonymized_text,
-            "mappings": [m.__dict__ for m in r.mappings],
+            "mappings": mappings,
+            "context_id": context_id,
+            "language_hint": language,
+            "detectors": meta,
+            "mapping_counts": by_type,
         }
 
     def anon_deanonymize(self, text: str, context_id: str) -> dict[str, Any]:
         _detectors, vault = build_default()
         r = deanonymize(text, vault, context_id=context_id)
+        used = [m.__dict__ for m in r.mappings_used]
+        by_type: dict[str, int] = {}
+        for m in used:
+            t = m.get("type") or "?"
+            by_type[t] = by_type.get(t, 0) + 1
         return {
             "anonymized_text": r.anonymized_text,
             "restored_text": r.restored_text,
-            "mappings_used": [m.__dict__ for m in r.mappings_used],
+            "mappings_used": used,
+            "context_id": context_id,
+            "mapping_counts": by_type,
+        }
+
+    def anon_anonymize(
+        self,
+        text: str,
+        *,
+        context_id: str,
+        tenant_id: str | None = None,
+        language: str | None = None,
+    ) -> dict[str, Any]:
+        """Deterministic anonymization using HMAC hash tokens.
+
+        Replaces detected PII with deterministic hash tokens and persists mappings in the vault.
+        """
+        detectors, vault = build_default()
+        meta = self._detectors_meta(detectors)
+        crypto = Crypto()
+        r = domain_anonymize(
+            text,
+            detectors,
+            crypto,
+            vault,
+            context_id=context_id,
+            tenant_id=tenant_id,
+            language=language,
+        )
+        mappings = [m.__dict__ for m in r.mappings]
+        by_type: dict[str, int] = {}
+        for m in mappings:
+            t = m.get("type") or "?"
+            by_type[t] = by_type.get(t, 0) + 1
+        return {
+            "original_text": r.original_text,
+            "anonymized_text": r.pseudonymized_text,
+            "mappings": mappings,
+            "tenant_id": tenant_id,
+            "context_id": context_id,
+            "language_hint": language,
+            "detectors": meta,
+            "mapping_counts": by_type,
+        }
+
+    def anon_presidio_readiness(self) -> dict[str, Any]:
+        """Return a diagnostic snapshot of Presidio / spaCy readiness.
+
+        Checks:
+        - Import of presidio_analyzer
+        - Import of spaCy
+        - Availability (loadable) of configured spaCy models in PiiSettings
+        - Whether regex fallback is enabled
+
+        Returns a dict with keys:
+        {
+          'presidio_imported': bool,
+          'presidio_error': str | None,
+          'spacy_imported': bool,
+          'spacy_error': str | None,
+          'models': [ {name, installed, error?} ],
+          'supported_languages_configured': [...],
+          'fallback_model': str | None,
+          'regex_fallback_enabled': bool,
+          'ready': bool,
+          'suggested_commands': [str, ...],
+        }
+        """
+        from anonymization.app.config.pii_settings import PiiSettings
+        import os
+
+        settings = PiiSettings.from_env()
+
+        presidio_imported = False
+        presidio_error: str | None = None
+        try:
+            import presidio_analyzer  # type: ignore  # noqa: F401
+
+            presidio_imported = True
+        except Exception as e:  # pragma: no cover - environment dependent
+            presidio_error = str(e)
+
+        spacy_imported = False
+        spacy_error: str | None = None
+        try:
+            import spacy  # type: ignore
+
+            spacy_imported = True
+        except Exception as e:  # pragma: no cover
+            spacy_error = str(e)
+            spacy = None  # type: ignore
+
+        models_checked: list[dict[str, Any]] = []
+        missing_models: list[str] = []
+        attempted: set[str] = set()
+        if spacy_imported:
+            # Unique list of configured + fallback
+            all_models = list(
+                dict.fromkeys(list(settings.language_models.values()) + [settings.fallback_model])
+            )
+            for model in all_models:
+                if not model or model in attempted:
+                    continue
+                attempted.add(model)
+                ok = False
+                err: str | None = None
+                try:  # pragma: no cover - depends on local environment
+                    import spacy as _sp
+
+                    _sp.load(model)
+                    ok = True
+                except Exception as e:
+                    err = str(e)
+                    missing_models.append(model)
+                models_checked.append({"name": model, "installed": ok, "error": err})
+
+        regex_fallback_enabled = not settings.disable_regex_fallback
+
+        ready = (
+            presidio_imported
+            and spacy_imported
+            and all(m.get("installed") for m in models_checked if m.get("name"))
+        )
+
+        suggested_cmds: list[str] = []
+        if not presidio_imported:
+            suggested_cmds.append("pip install presidio-analyzer presidio-recognizers spacy")
+        if spacy_imported and missing_models:
+            for m in missing_models:
+                # spaCy model downloads typically via python -m spacy download
+                suggested_cmds.append(f"python -m spacy download {m}")
+        elif not spacy_imported:
+            suggested_cmds.append("pip install spacy")
+
+        env_hint = {
+            k: os.environ.get(k)
+            for k in [
+                "ANON_PRESIDIO_LANGS",
+                "ANON_PRESIDIO_FALLBACK_MODEL",
+                "ANON_PRESIDIO_DISABLE_FALLBACK",
+                "ANON_PRESIDIO_PATTERNS",
+            ]
+            if os.environ.get(k) is not None
+        }
+
+        return {
+            "presidio_imported": presidio_imported,
+            "presidio_error": presidio_error,
+            "spacy_imported": spacy_imported,
+            "spacy_error": spacy_error,
+            "models": models_checked,
+            "supported_languages_configured": sorted(settings.language_models.keys()),
+            "fallback_model": settings.fallback_model,
+            "regex_fallback_enabled": regex_fallback_enabled,
+            "ready": ready,
+            "suggested_commands": suggested_cmds,
+            "env": env_hint,
+        }
+
+    # --- Batch Anonymization (new) -------------------------------------------------
+    def anon_batch_plan(self, cfg: Mapping[str, Any]) -> dict[str, Any]:
+        """Plan which Markdown files would be anonymized.
+
+        cfg keys expected:
+            src (str): source folder
+            out (str): output folder
+            recurse (bool)
+            overwrite (bool)
+            mode (str): 'deterministic' | 'pseudonymize'
+            include_ext (list[str]) optional (default ['.md'])
+            skip_suffixes (list[str]) optional (default anonymized suffixes)
+        """
+        import os
+        from datetime import datetime as _dt
+
+        src = str(cfg.get("src") or "").strip()
+        out = str(cfg.get("out") or "").strip()
+        recurse = bool(cfg.get("recurse", True))
+        overwrite = bool(cfg.get("overwrite", False))
+        mode = (cfg.get("mode") or "deterministic").lower()
+        include_ext = list(cfg.get("include_ext") or [".md"])  # only .md by default
+        skip_suffixes = list(
+            cfg.get("skip_suffixes") or [".anonymized.md", ".pseudonymized.md", ".restored.md"]
+        )
+
+        matched: list[dict[str, Any]] = []
+        would_process = 0
+        would_skip_existing = 0
+
+        if not src or not os.path.isdir(src):
+            return {"error": f"Invalid source folder: {src}"}
+        if not out:
+            return {"error": "Output folder not specified"}
+        if os.path.abspath(src) == os.path.abspath(out):  # safety
+            return {"error": "Source and Output folders must differ"}
+
+        for root, dirs, files in os.walk(src):
+            for fn in files:
+                low = fn.lower()
+                # skip already anonymized outputs
+                if any(low.endswith(sfx) for sfx in skip_suffixes):
+                    continue
+                ext = os.path.splitext(low)[1]
+                if ext not in include_ext:
+                    continue
+                src_path = os.path.join(root, fn)
+                rel = os.path.relpath(src_path, src)
+                base_no_ext = os.path.splitext(rel)[0]
+                suffix = ".anonymized.md" if mode == "deterministic" else ".pseudonymized.md"
+                out_path = os.path.join(out, base_no_ext + suffix)
+                exists = os.path.exists(out_path)
+                will = (not exists) or overwrite
+                matched.append(
+                    {
+                        "src": src_path,
+                        "rel": rel,
+                        "out": out_path,
+                        "exists": exists,
+                        "will_process": will,
+                    }
+                )
+                if will:
+                    would_process += 1
+                else:
+                    would_skip_existing += 1
+            if not recurse:
+                break
+
+        return {
+            "src": src,
+            "out": out,
+            "mode": mode,
+            "matched": len(matched),
+            "would_process": would_process,
+            "would_skip_existing": would_skip_existing,
+            "overwrite": overwrite,
+            "started_at": _dt.now().isoformat(),
+        }
+
+    def anon_batch_run(self, cfg: Mapping[str, Any]) -> dict[str, Any]:
+        """Run batch anonymization over a folder of Markdown files.
+
+        Returns summary with counts and minimal per-file statuses.
+        """
+        import os, traceback
+        from datetime import datetime as _dt
+        from shared.hashing import document_fingerprint
+
+        plan = self.anon_batch_plan(cfg)
+        if plan.get("error"):
+            return plan
+
+        src = plan["src"]
+        out = plan["out"]
+        mode = plan["mode"]
+        overwrite = bool(cfg.get("overwrite", False))
+        language = cfg.get("language") or None
+        tenant_id = cfg.get("tenant_id") or None
+
+        try:
+            os.makedirs(out, exist_ok=True)
+        except Exception:
+            return {"error": f"Failed to create output directory: {out}"}
+
+        detectors, vault = build_default()
+        crypto = Crypto()
+
+        processed_ok = 0
+        skipped_existing = 0
+        failed = 0
+        files_status: list[dict[str, Any]] = []
+        by_type: dict[str, int] = {}
+
+        # Recompute iterable of entries (need detailed info)
+        # (Re-run listing quickly to get consistent order)
+        entries = []
+        include_ext = [".md"]
+        skip_suffixes = [".anonymized.md", ".pseudonymized.md", ".restored.md"]
+        recurse = bool(cfg.get("recurse", True))
+        for root, dirs, files in os.walk(src):
+            for fn in files:
+                low = fn.lower()
+                if any(low.endswith(sfx) for sfx in skip_suffixes):
+                    continue
+                ext = os.path.splitext(low)[1]
+                if ext not in include_ext:
+                    continue
+                src_path = os.path.join(root, fn)
+                rel = os.path.relpath(src_path, src)
+                base_no_ext = os.path.splitext(rel)[0]
+                suffix = ".anonymized.md" if mode == "deterministic" else ".pseudonymized.md"
+                out_path = os.path.join(out, base_no_ext + suffix)
+                exists = os.path.exists(out_path)
+                entries.append((src_path, rel, out_path, exists))
+            if not recurse:
+                break
+
+        for src_path, rel, out_path, exists in entries:
+            if exists and not overwrite:
+                skipped_existing += 1
+                files_status.append({"rel": rel, "status": "skipped_exists"})
+                continue
+            # Ensure subdirectory path exists
+            out_dir = os.path.dirname(out_path)
+            try:
+                os.makedirs(out_dir, exist_ok=True)
+            except Exception:
+                failed += 1
+                files_status.append({"rel": rel, "status": "error", "error": "mkdir_failed"})
+                continue
+            try:
+                with open(src_path, "r", encoding="utf-8", errors="ignore") as f:
+                    text = f.read()
+                # Derive stable context id
+                st = os.stat(src_path)
+                fp = document_fingerprint(src_path, size_bytes=st.st_size, mtime=st.st_mtime)
+                ctx_id = f"ctx_{fp[:16]}"
+                if mode == "deterministic":
+                    res = domain_anonymize(
+                        text,
+                        detectors,
+                        crypto,
+                        vault,
+                        context_id=ctx_id,
+                        tenant_id=tenant_id,
+                        language=language,
+                    )
+                    out_text = res.pseudonymized_text
+                else:
+                    res = pseudonymize(text, detectors, vault, context_id=ctx_id, language=language)
+                    out_text = res.pseudonymized_text
+                # Aggregate mapping types
+                for m in res.mappings:
+                    t = m.type or "?"
+                    by_type[t] = by_type.get(t, 0) + 1
+                with open(out_path, "w", encoding="utf-8") as wf:
+                    wf.write(out_text)
+                processed_ok += 1
+                files_status.append({"rel": rel, "status": "ok", "context_id": ctx_id})
+            except Exception as e:  # pragma: no cover - runtime safety
+                failed += 1
+                files_status.append(
+                    {
+                        "rel": rel,
+                        "status": "error",
+                        "error": str(e),
+                        "trace": traceback.format_exc(limit=1),
+                    }
+                )
+
+        ended_at = _dt.now().isoformat()
+        return {
+            "mode": mode,
+            "src": src,
+            "out": out,
+            "processed_ok": processed_ok,
+            "skipped_existing": skipped_existing,
+            "failed": failed,
+            "total": processed_ok + skipped_existing + failed,
+            "mapping_counts": by_type,
+            "files": files_status[:200],  # cap to avoid huge payload
+            "ended_at": ended_at,
         }

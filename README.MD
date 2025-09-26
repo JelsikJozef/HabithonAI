@@ -6,6 +6,37 @@ This repo hosts modules for offline document preprocessing (convert to Markdown,
 - GUI: minimal wrapper for local runs
 - Vector store: adapters and app for building/searching collections
 
+## One-command full installation
+
+If you want every capability (GUI, preprocessing, anonymization with Presidio, translation engines, API stack) run:
+
+```bash
+bash scripts/setup_all.sh
+```
+
+This script:
+- Installs all Python dependencies from `requirements-all.txt` (GUI, parsers, Presidio, spaCy, translation, FastAPI stack)
+- Downloads required spaCy models: `en_core_web_sm`, `de_core_news_sm`, `xx_ent_wiki_sm`
+- Prints optional environment variable hints
+
+Manual alternative:
+```bash
+pip install -r requirements-all.txt
+python3 -m spacy download en_core_web_sm
+python3 -m spacy download de_core_news_sm
+python3 -m spacy download xx_ent_wiki_sm
+```
+
+Minimal GUI-only install:
+```bash
+pip install -r requirements-gui.txt
+```
+
+Launch the desktop GUI after install:
+```bash
+PYTHONPATH=src python3 -m gui.app
+```
+
 Quickstart (preprocessing CLI)
 
 ```bash

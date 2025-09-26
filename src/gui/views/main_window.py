@@ -7,6 +7,7 @@ from .tabs.anonymization_tab import AnonymizationTab
 from .tabs.settings_tab import SettingsTab
 from .tabs.jobs_tab import JobsTab
 from .tabs.lang_detect_tab import LanguageDetectTab
+from .tabs.anon_batch_tab import AnonBatchTab  # new import
 
 
 class MainWindow(QMainWindow):
@@ -16,6 +17,7 @@ class MainWindow(QMainWindow):
         - Preprocess: Convert to Markdown (plan + run)
         - Language Detection: Detect primary language of a document
         - Anonymization: Detect / Pseudonymize / Deanonymize
+        - Anon Batch: Folder anonymization (deterministic or pseudonymize)  # new
         - Jobs: History & logs (placeholder for now)
         - Settings: Global configuration and preflight checks
     """
@@ -33,12 +35,14 @@ class MainWindow(QMainWindow):
         self.convert_tab = ConvertTab(self)
         self.lang_tab = LanguageDetectTab(self)
         self.anon_tab = AnonymizationTab(self)
+        self.anon_batch_tab = AnonBatchTab(self)  # new
         self.jobs_tab = JobsTab(self)
         self.settings_tab = SettingsTab(self)
 
         tabs.addTab(self.convert_tab, "Preprocess")
         tabs.addTab(self.lang_tab, "Language Detection")
         tabs.addTab(self.anon_tab, "Anonymization")
+        tabs.addTab(self.anon_batch_tab, "Anon Batch")  # new
         tabs.addTab(self.jobs_tab, "Jobs")
         tabs.addTab(self.settings_tab, "Settings")
 

@@ -185,6 +185,11 @@ except Exception:  # pragma: no cover - stub fallback
             # Return tuple (path, filter)
             return ("", "")
 
+        @staticmethod
+        def getSaveFileName(*args, **kwargs):
+            # Return tuple (path, filter)
+            return ("", "")
+
     class QCheckBox(_Widget):
         def __init__(self, *args, **kwargs):
             self.toggled = _Signal()

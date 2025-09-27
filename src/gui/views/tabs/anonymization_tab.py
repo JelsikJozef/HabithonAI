@@ -15,6 +15,7 @@ from ..qt import (
 from ...services.facade import GuiServices
 from shared.hashing import document_fingerprint  # stable context id from file
 from ..ui_helpers import auto_expand_combo, wrap_with_help, create_field_label  # new imports
+from ...services.async_worker import start_worker  # NEW
 
 
 class AnonymizationTab(QWidget):
@@ -28,6 +29,8 @@ class AnonymizationTab(QWidget):
         self.svc = GuiServices()
         self._last_result: dict | None = None
         self._opened_path: str | None = None
+        self._jobs: list[tuple] = []  # keep thread/worker refs
+        self._current: tuple | None = None  # (thread, worker)
 
         vbox = QVBoxLayout(self)
 
@@ -97,6 +100,9 @@ class AnonymizationTab(QWidget):
         )
         self.presidio_btn = QPushButton("Check Presidio")
         self.presidio_btn.setToolTip("Inspect Presidio / spaCy readiness and model availability.")
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setToolTip("Request cancellation of the current action.")
+        self.cancel_btn.setEnabled(False)
         for w, tip in [
             (self.detect_btn, None),
             (self.pseudo_btn, None),
@@ -105,6 +111,7 @@ class AnonymizationTab(QWidget):
             (self.presidio_btn, None),
         ]:
             actions.addWidget(wrap_with_help(w, w.toolTip() or "Action"))
+        actions.addWidget(self.cancel_btn)
         actions.addStretch(1)
         vbox.addLayout(actions)
 
@@ -121,6 +128,34 @@ class AnonymizationTab(QWidget):
         self.de_btn.clicked.connect(self._on_de)
         self.anonym_btn.clicked.connect(self._on_anonym)
         self.presidio_btn.clicked.connect(self._on_presidio_check)
+        self.cancel_btn.clicked.connect(self._on_cancel)
+
+    def cancel_all_jobs(self) -> None:
+        """Cancel and wait for all active background jobs (app shutdown safety)."""
+        try:
+            if self._current and len(self._current) == 2:
+                _t, w = self._current
+                try:
+                    w.cancel()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        for t, w in list(self._jobs):
+            try:
+                w.cancel()
+            except Exception:
+                pass
+        for t, w in list(self._jobs):
+            try:
+                t.quit()
+                t.wait()
+            except Exception:
+                pass
+        try:
+            self.cancel_btn.setEnabled(False)
+        except Exception:
+            pass
 
     # --- Helpers / formatting -------------------------------------------------
     def _lang(self) -> str | None:
@@ -133,6 +168,37 @@ class AnonymizationTab(QWidget):
     def _tenant(self) -> str | None:
         s = self.tenant_edit.text().strip()
         return s or None
+
+    def _set_busy(self, busy: bool) -> None:
+        for w in [
+            self.open_btn,
+            self.save_btn,
+            self.detect_btn,
+            self.pseudo_btn,
+            self.de_btn,
+            self.anonym_btn,
+            self.presidio_btn,
+            self.lang_combo,
+            self.ctx_edit,
+            self.tenant_edit,
+            self.input_text,
+        ]:
+            try:
+                w.setEnabled(not busy)
+            except Exception:
+                pass
+        try:
+            self.cancel_btn.setEnabled(busy)
+        except Exception:
+            pass
+
+    def _append_log(self, line: str) -> None:
+        try:
+            prev = self.output.toPlainText()
+            nl = "\n" if prev else ""
+            self.output.setPlainText(prev + nl + str(line))
+        except Exception:
+            pass
 
     def _derive_context_from_file(self, path: str) -> str:
         try:
@@ -235,6 +301,20 @@ class AnonymizationTab(QWidget):
         except Exception as e:
             self.output.setPlainText(f"Failed to open file: {e}")
 
+    # --- Cancel action (missing handler added) -------------------------------
+    def _on_cancel(self) -> None:
+        if self._current and len(self._current) == 2:
+            _t, w = self._current
+            try:
+                w.cancel()
+                self._append_log("User cancelled. Waiting for safe stop…")
+            except Exception:
+                pass
+        try:
+            self.cancel_btn.setEnabled(False)
+        except Exception:
+            pass
+
     # --- Save output ----------------------------------------------------------
     def _resolve_save_text(self) -> tuple[str, str]:
         """Return (text, default_suffix) to save based on last action."""
@@ -281,23 +361,54 @@ class AnonymizationTab(QWidget):
     def _on_detect(self) -> None:
         try:
             text = self.input_text.toPlainText()
-            res = self.svc.anon_detect(text, language=self._lang())
-            ents = res.get("entities") or []
-            counts = res.get("detector_counts") or {}
-            detectors_meta = self._fmt_detectors(res.get("detectors"))
-            summary = ", ".join([f"{k}={v}" for k, v in sorted(counts.items())]) or "-"
-            out_parts = [
-                self._fmt_section("DETECTION"),
-                f"Language hint: {res.get('language_hint') or '-'}",
-                f"Detectors: {detectors_meta}",
-                f"Entities total: {len(ents)} (per detector: {summary})",
-                self._fmt_section("ENTITIES"),
-                self._fmt_entities(ents),
-            ]
-            self.output.setPlainText("\n".join(out_parts))
-            self._last_result = res
         except Exception as e:
             self.output.setPlainText(f"Detect failed: {e}")
+            return
+        self.output.setPlainText("")
+        self._set_busy(True)
+
+        def job(progress=None, should_cancel=None):
+            return self.svc.anon_detect(
+                text, language=self._lang(), progress=progress, should_cancel=should_cancel
+            )
+
+        def on_result(res: dict):
+            try:
+                if res.get("cancelled"):
+                    prev = self.output.toPlainText()
+                    self.output.setPlainText(prev + ("\n" if prev else "") + "Cancelled.")
+                    return
+                # ...existing formatting...
+                ents = res.get("entities") or []
+                counts = res.get("detector_counts") or {}
+                detectors_meta = self._fmt_detectors(res.get("detectors"))
+                summary = ", ".join([f"{k}={v}" for k, v in sorted(counts.items())]) or "-"
+                out_parts = [
+                    self._fmt_section("DETECTION"),
+                    f"Language hint: {res.get('language_hint') or '-'}",
+                    f"Detectors: {detectors_meta}",
+                    f"Entities total: {len(ents)} (per detector: {summary})",
+                    self._fmt_section("ENTITIES"),
+                    self._fmt_entities(ents),
+                ]
+                self.output.setPlainText("\n".join(out_parts))
+                self._last_result = res
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        def on_error(err: str):
+            try:
+                self.output.setPlainText(f"Detect failed: {err}")
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        t, w = start_worker(job, on_log=self._append_log, on_result=on_result, on_error=on_error)
+        self._jobs.append((t, w))
+        self._current = (t, w)
 
     def _on_pseudo(self) -> None:
         ctx = self._ctx()
@@ -306,25 +417,61 @@ class AnonymizationTab(QWidget):
             return
         try:
             text = self.input_text.toPlainText()
-            res = self.svc.anon_pseudonymize(text, context_id=ctx, language=self._lang())
-            mappings = res.get("mappings") or []
-            map_counts = res.get("mapping_counts") or {}
-            detectors_meta = self._fmt_detectors(res.get("detectors"))
-            counts_summary = ", ".join([f"{k}={v}" for k, v in sorted(map_counts.items())]) or "-"
-            out_parts = [
-                self._fmt_section("PSEUDONYMIZATION"),
-                f"Context: {res.get('context_id')}  Language: {res.get('language_hint') or '-'}",
-                f"Detectors: {detectors_meta}",
-                f"Mappings: {len(mappings)} (by type: {counts_summary})",
-                self._fmt_section("OUTPUT TEXT"),
-                res.get("pseudonymized_text", ""),
-                self._fmt_section("MAPPINGS"),
-                self._fmt_mappings(mappings),
-            ]
-            self.output.setPlainText("\n".join(out_parts))
-            self._last_result = res
         except Exception as e:
             self.output.setPlainText(f"Pseudonymize failed: {e}")
+            return
+        self.output.setPlainText("")
+        self._set_busy(True)
+
+        def job(progress=None, should_cancel=None):
+            return self.svc.anon_pseudonymize(
+                text,
+                context_id=ctx,
+                language=self._lang(),
+                progress=progress,
+                should_cancel=should_cancel,
+            )
+
+        def on_result(res: dict):
+            try:
+                if res.get("cancelled"):
+                    prev = self.output.toPlainText()
+                    self.output.setPlainText(prev + ("\n" if prev else "") + "Cancelled.")
+                    return
+                mappings = res.get("mappings") or []
+                map_counts = res.get("mapping_counts") or {}
+                detectors_meta = self._fmt_detectors(res.get("detectors"))
+                counts_summary = (
+                    ", ".join([f"{k}={v}" for k, v in sorted(map_counts.items())]) or "-"
+                )
+                out_parts = [
+                    self._fmt_section("PSEUDONYMIZATION"),
+                    f"Context: {res.get('context_id')}  Language: {res.get('language_hint') or '-'}",
+                    f"Detectors: {detectors_meta}",
+                    f"Mappings: {len(mappings)} (by type: {counts_summary})",
+                    self._fmt_section("OUTPUT TEXT"),
+                    res.get("pseudonymized_text", ""),
+                    self._fmt_section("MAPPINGS"),
+                    self._fmt_mappings(mappings),
+                ]
+                self.output.setPlainText("\n".join(out_parts))
+                self._last_result = res
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        def on_error(err: str):
+            try:
+                self.output.setPlainText(f"Pseudonymize failed: {err}")
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        t, w = start_worker(job, on_log=self._append_log, on_result=on_result, on_error=on_error)
+        self._jobs.append((t, w))
+        self._current = (t, w)
 
     def _on_de(self) -> None:
         ctx = self._ctx()
@@ -333,23 +480,55 @@ class AnonymizationTab(QWidget):
             return
         try:
             text = self.input_text.toPlainText()
-            res = self.svc.anon_deanonymize(text, context_id=ctx)
-            used = res.get("mappings_used") or []
-            map_counts = res.get("mapping_counts") or {}
-            counts_summary = ", ".join([f"{k}={v}" for k, v in sorted(map_counts.items())]) or "-"
-            out_parts = [
-                self._fmt_section("DE-ANONYMIZATION"),
-                f"Context: {res.get('context_id')}",
-                f"Mappings used: {len(used)} (by type: {counts_summary})",
-                self._fmt_section("RESTORED TEXT"),
-                res.get("restored_text", ""),
-                self._fmt_section("MAPPINGS USED"),
-                self._fmt_mappings(used),
-            ]
-            self.output.setPlainText("\n".join(out_parts))
-            self._last_result = res
         except Exception as e:
             self.output.setPlainText(f"De-anonymize failed: {e}")
+            return
+        self.output.setPlainText("")
+        self._set_busy(True)
+
+        def job(progress=None, should_cancel=None):
+            return self.svc.anon_deanonymize(
+                text, context_id=ctx, progress=progress, should_cancel=should_cancel
+            )
+
+        def on_result(res: dict):
+            try:
+                if res.get("cancelled"):
+                    prev = self.output.toPlainText()
+                    self.output.setPlainText(prev + ("\n" if prev else "") + "Cancelled.")
+                    return
+                used = res.get("mappings_used") or []
+                map_counts = res.get("mapping_counts") or {}
+                counts_summary = (
+                    ", ".join([f"{k}={v}" for k, v in sorted(map_counts.items())]) or "-"
+                )
+                out_parts = [
+                    self._fmt_section("DE-ANONYMIZATION"),
+                    f"Context: {res.get('context_id')}",
+                    f"Mappings used: {len(used)} (by type: {counts_summary})",
+                    self._fmt_section("RESTORED TEXT"),
+                    res.get("restored_text", ""),
+                    self._fmt_section("MAPPINGS USED"),
+                    self._fmt_mappings(used),
+                ]
+                self.output.setPlainText("\n".join(out_parts))
+                self._last_result = res
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        def on_error(err: str):
+            try:
+                self.output.setPlainText(f"De-anonymize failed: {err}")
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        t, w = start_worker(job, on_log=self._append_log, on_result=on_result, on_error=on_error)
+        self._jobs.append((t, w))
+        self._current = (t, w)
 
     def _on_anonym(self) -> None:
         ctx = self._ctx()
@@ -358,30 +537,62 @@ class AnonymizationTab(QWidget):
             return
         try:
             text = self.input_text.toPlainText()
-            res = self.svc.anon_anonymize(
+        except Exception as e:
+            self.output.setPlainText(f"Deterministic anonymize failed: {e}")
+            return
+        self.output.setPlainText("")
+        self._set_busy(True)
+
+        def job(progress=None, should_cancel=None):
+            return self.svc.anon_anonymize(
                 text,
                 context_id=ctx,
                 tenant_id=self._tenant(),
                 language=self._lang(),
+                progress=progress,
+                should_cancel=should_cancel,
             )
-            mappings = res.get("mappings") or []
-            map_counts = res.get("mapping_counts") or {}
-            detectors_meta = self._fmt_detectors(res.get("detectors"))
-            counts_summary = ", ".join([f"{k}={v}" for k, v in sorted(map_counts.items())]) or "-"
-            out_parts = [
-                self._fmt_section("DETERMINISTIC ANONYMIZATION"),
-                f"Context: {res.get('context_id')}  Tenant: {res.get('tenant_id') or '-'}  Lang: {res.get('language_hint') or '-'}",
-                f"Detectors: {detectors_meta}",
-                f"Mappings persisted: {len(mappings)} (by type: {counts_summary})",
-                self._fmt_section("ANONYMIZED TEXT"),
-                res.get("anonymized_text", ""),
-                self._fmt_section("MAPPINGS"),
-                self._fmt_mappings(mappings),
-            ]
-            self.output.setPlainText("\n".join(out_parts))
-            self._last_result = res
-        except Exception as e:
-            self.output.setPlainText(f"Deterministic anonymize failed: {e}")
+
+        def on_result(res: dict):
+            try:
+                if res.get("cancelled"):
+                    prev = self.output.toPlainText()
+                    self.output.setPlainText(prev + ("\n" if prev else "") + "Cancelled.")
+                    return
+                mappings = res.get("mappings") or []
+                map_counts = res.get("mapping_counts") or {}
+                detectors_meta = self._fmt_detectors(res.get("detectors"))
+                counts_summary = (
+                    ", ".join([f"{k}={v}" for k, v in sorted(map_counts.items())]) or "-"
+                )
+                out_parts = [
+                    self._fmt_section("DETERMINISTIC ANONYMIZATION"),
+                    f"Context: {res.get('context_id')}  Tenant: {res.get('tenant_id') or '-'}  Lang: {res.get('language_hint') or '-'}",
+                    f"Detectors: {detectors_meta}",
+                    f"Mappings persisted: {len(mappings)} (by type: {counts_summary})",
+                    self._fmt_section("ANONYMIZED TEXT"),
+                    res.get("anonymized_text", ""),
+                    self._fmt_section("MAPPINGS"),
+                    self._fmt_mappings(mappings),
+                ]
+                self.output.setPlainText("\n".join(out_parts))
+                self._last_result = res
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        def on_error(err: str):
+            try:
+                self.output.setPlainText(f"Deterministic anonymize failed: {err}")
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        t, w = start_worker(job, on_log=self._append_log, on_result=on_result, on_error=on_error)
+        self._jobs.append((t, w))
+        self._current = (t, w)
 
     def _fmt_presidio_readiness(self, diag: dict | None) -> str:
         if not diag:
@@ -421,13 +632,45 @@ class AnonymizationTab(QWidget):
         return "\n".join(lines)
 
     def _on_presidio_check(self) -> None:
-        try:
-            diag = self.svc.anon_presidio_readiness()
-            out = [
-                self._fmt_section("PRESIDIO READINESS"),
-                self._fmt_presidio_readiness(diag),
-            ]
-            self.output.setPlainText("\n".join(out))
-            self._last_result = diag
-        except Exception as e:
-            self.output.setPlainText(f"Presidio readiness check failed: {e}")
+        self.output.setPlainText("")
+        self._set_busy(True)
+
+        def job(progress=None, should_cancel=None):
+            return self.svc.anon_presidio_readiness(progress=progress, should_cancel=should_cancel)
+
+        def on_result(diag: dict):
+            try:
+                try:
+                    out = [
+                        self._fmt_section("PRESIDIO READINESS"),
+                        self._fmt_presidio_readiness(diag),
+                    ]
+                    self.output.setPlainText("\n".join(out))
+                    self._last_result = diag
+                except Exception as e:
+                    # Defensive: show message instead of letting an exception crash the UI
+                    self.output.setPlainText(
+                        f"Presidio readiness formatting failed: {e}\nRaw: {diag!r}"
+                    )
+            finally:
+                self._set_busy(False)
+                try:
+                    self.cancel_btn.setEnabled(False)
+                except Exception:
+                    pass
+                self._current = None
+
+        def on_error(err: str):
+            try:
+                self.output.setPlainText(f"Presidio readiness check failed: {err}")
+            finally:
+                self._set_busy(False)
+                try:
+                    self.cancel_btn.setEnabled(False)
+                except Exception:
+                    pass
+                self._current = None
+
+        t, w = start_worker(job, on_log=self._append_log, on_result=on_result, on_error=on_error)
+        self._jobs.append((t, w))
+        self._current = (t, w)

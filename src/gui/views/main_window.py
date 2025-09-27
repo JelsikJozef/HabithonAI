@@ -47,3 +47,33 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.settings_tab, "Settings")
 
         self.setCentralWidget(tabs)
+
+    def cancel_all_jobs(self) -> None:
+        for tab in [
+            getattr(self, "convert_tab", None),
+            getattr(self, "lang_tab", None),
+            getattr(self, "anon_tab", None),
+            getattr(self, "anon_batch_tab", None),
+        ]:
+            if tab is None:
+                continue
+            try:
+                if hasattr(tab, "cancel_all_jobs"):
+                    tab.cancel_all_jobs()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        """Attempt to cancel and join all background jobs before closing.
+
+        This prevents Qt from aborting with 'QThread: Destroyed while thread is still running'.
+        """
+        try:
+            self.cancel_all_jobs()
+        except Exception:
+            pass
+        try:
+            super().closeEvent(event)
+        except Exception:
+            # In case the base implementation raises, still let the window close
+            pass

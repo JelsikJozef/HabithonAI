@@ -19,6 +19,7 @@ from ..qt import (
 from ..ui_helpers import section_header, auto_expand_combo, wrap_with_help  # updated import
 
 from ...services.facade import GuiServices
+from ...services.async_worker import start_worker  # NEW
 
 
 class ConvertTab(QWidget):
@@ -27,6 +28,8 @@ class ConvertTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.svc = GuiServices()
+        self._jobs: list[tuple] = []  # keep thread/worker refs
+        self._current: tuple | None = None  # (thread, worker)
 
         vbox = QVBoxLayout(self)
         form = QFormLayout()
@@ -98,10 +101,10 @@ class ConvertTab(QWidget):
 
         # Translation options (enabled only when Translate is selected)
         tr_form = QFormLayout()
-        self.make_en_cb = QCheckBox("Make English variant (.en.md)")
+        self.make_en_cb = QCheckBox("Make English variant (_en.md)")
         self.make_en_cb.setChecked(False)
         self.make_en_cb.setToolTip(
-            "If checked, creates/updates English-sidecar files. If unchecked, updates inline language where applicable."
+            "If checked, creates/updates English-sidecar files with the _en.md suffix. If unchecked, updates inline language where applicable."
         )
         self.translator_combo = QComboBox()
         self.translator_combo.addItems(["auto", "marian_opus", "ct2_nllb"])  # auto -> None
@@ -130,8 +133,6 @@ class ConvertTab(QWidget):
 
         # Advanced routing controls (new)
         routing_group = QFormLayout()
-        # routing_label = QLabel("Advanced Routing (Model-Only)")  # replaced
-        # routing_label.setStyleSheet("font-weight: bold; color: #2c5aa0;")
         routing_label = section_header("Advanced Routing (Model-Only)")
         tr_form.addRow(routing_label)
 
@@ -217,12 +218,16 @@ class ConvertTab(QWidget):
         self.run_btn.setToolTip(
             "Run selected actions in order: Convert (if checked) then Translate (if checked)."
         )
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setToolTip("Request cancellation of the current run.")
+        self.cancel_btn.setEnabled(False)
         actions.addWidget(
             wrap_with_help(self.plan_btn, "Dry-run: show counts of convertible files.")
         )
         actions.addWidget(
             wrap_with_help(self.run_btn, "Execute selected stages: Convert and/or Translate.")
         )
+        actions.addWidget(self.cancel_btn)
         actions.addStretch(1)
         vbox.addLayout(actions)
 
@@ -236,6 +241,7 @@ class ConvertTab(QWidget):
         pick_out.clicked.connect(self._browse_out)
         self.plan_btn.clicked.connect(self._on_plan)
         self.run_btn.clicked.connect(self._on_run_combined)
+        self.cancel_btn.clicked.connect(self._on_cancel)
         self.translate_cb.toggled.connect(self._update_enabled_states)
         self.convert_cb.toggled.connect(self._update_enabled_states)
         self.enable_routing_cb.toggled.connect(self._update_enabled_states)
@@ -244,6 +250,89 @@ class ConvertTab(QWidget):
         self._update_enabled_states()
 
     # --- Helpers ---
+
+    def cancel_all_jobs(self) -> None:
+        """Cancel and wait for all active background jobs (app shutdown safety)."""
+        try:
+            if self._current and len(self._current) == 2:
+                _t, w = self._current
+                try:
+                    w.cancel()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Signal cancel to all and wait for threads to finish
+        for t, w in list(self._jobs):
+            try:
+                w.cancel()
+            except Exception:
+                pass
+        for t, w in list(self._jobs):
+            try:
+                t.quit()
+                t.wait()
+            except Exception:
+                pass
+        try:
+            self.cancel_btn.setEnabled(False)
+        except Exception:
+            pass
+
+    def _on_cancel(self) -> None:
+        if self._current and len(self._current) == 2:
+            _t, w = self._current
+            try:
+                w.cancel()
+                self._append_log("User cancelled. Waiting for safe stop…")
+            except Exception:
+                pass
+        self.cancel_btn.setEnabled(False)
+
+    def _set_busy(self, busy: bool) -> None:
+        for w in [
+            self.plan_btn,
+            self.run_btn,
+            self.src_edit,
+            self.out_edit,
+            self.recurse_cb,
+            self.overwrite_cb,
+            self.workers_sp,
+            self.progress_mode,
+            self.log_level,
+            self.convert_cb,
+            self.translate_cb,
+            self.make_en_cb,
+            self.translator_combo,
+            self.lang_cands,
+            self.lang_max_chars,
+            self.lang_min_chars,
+            self.enable_routing_cb,
+            self.tau_low,
+            self.delta_close,
+            self.tau_en,
+            self.similarity_noop,
+            self.probe_k,
+            self.probe_slice,
+            self.max_retries,
+        ]:
+            try:
+                w.setEnabled(not busy)
+            except Exception:
+                pass
+        # Cancel button is only enabled while busy
+        try:
+            self.cancel_btn.setEnabled(busy)
+        except Exception:
+            pass
+
+    def _append_log(self, line: str) -> None:
+        try:
+            prev = self.output.toPlainText()
+            nl = "\n" if prev else ""
+            self.output.setPlainText(prev + nl + str(line))
+        except Exception:
+            pass
 
     def _update_enabled_states(self) -> None:
         # Translation options enabled only if translate is selected
@@ -330,6 +419,19 @@ class ConvertTab(QWidget):
         if self.translate_cb.isChecked():
             # Attach langid preferences only when translate is requested
             cfg["langid"] = langid_cfg
+            # Attach routing only when enabled
+            if self.enable_routing_cb.isChecked():
+                cfg["routing"] = {
+                    "tau_low": self.tau_low.value() / 100.0,
+                    "delta_close": self.delta_close.value() / 100.0,
+                    "tau_en": self.tau_en.value() / 100.0,
+                    "similarity_noop_threshold": self.similarity_noop.value() / 100.0,
+                    "probe": {
+                        "k": int(self.probe_k.value()),
+                        "slice_chars": int(self.probe_slice.value()),
+                    },
+                    "max_retries": int(self.max_retries.value()),
+                }
         return cfg
 
     def _on_plan(self) -> None:
@@ -338,23 +440,47 @@ class ConvertTab(QWidget):
                 "Plan works with Convert. Enable 'Convert to Markdown' to preview."
             )
             return
-        try:
-            cfg = dict(self._cfg())
-            plan = self.svc.convert_plan(cfg)
-            summary = plan.get("summary", {})
-            lines = [
-                "Plan computed:",
-                f"  matched={summary.get('matched')} would_convert={summary.get('would_convert')} would_skip_existing={summary.get('would_skip_existing')}",
-            ]
-            self.output.setPlainText("\n".join(lines))
-        except Exception as e:
-            self.output.setPlainText(f"Plan failed: {e}")
+        cfg = dict(self._cfg())
+        self.output.setPlainText("")
+        self._set_busy(True)
+
+        def job(progress=None, should_cancel=None):
+            return self.svc.convert_plan(cfg, progress=progress, should_cancel=should_cancel)
+
+        def on_result(plan: dict):
+            try:
+                if plan.get("cancelled"):
+                    prev = self.output.toPlainText()
+                    self.output.setPlainText((prev + ("\n" if prev else "") + "Cancelled."))
+                    return
+                summary = plan.get("summary", {})
+                lines = [
+                    "Plan computed:",
+                    f"  matched={summary.get('matched')} would_convert={summary.get('would_convert')} would_skip_existing={summary.get('would_skip_existing')}",
+                ]
+                prev = self.output.toPlainText()
+                nl = "\n" if prev else ""
+                self.output.setPlainText(prev + nl + "\n".join(lines))
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        def on_error(err: str):
+            try:
+                self.output.setPlainText(f"Plan failed: {err}")
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        t, w = start_worker(job, on_log=self._append_log, on_result=on_result, on_error=on_error)
+        self._jobs.append((t, w))
+        self._current = (t, w)
 
     def _on_run_combined(self) -> None:
-        actions_taken: list[str] = []
         try:
             cfg = dict(self._cfg())
-
             # Validate basic inputs
             if not cfg.get("src") or not cfg.get("out"):
                 self.output.setPlainText("Please select Source and Output folders.")
@@ -362,25 +488,23 @@ class ConvertTab(QWidget):
             if not (self.convert_cb.isChecked() or self.translate_cb.isChecked()):
                 self.output.setPlainText("Nothing selected to run. Check Convert and/or Translate.")
                 return
+        except Exception as e:
+            self.output.setPlainText(f"Invalid configuration: {e}")
+            return
 
-            lines: list[str] = []
+        self.output.setPlainText("")
+        self._set_busy(True)
 
-            # 1) Convert
+        def job(progress=None, should_cancel=None):
+            results: dict[str, Any] = {}
             if self.convert_cb.isChecked():
-                res = self.svc.convert_run(cfg)
-                actions_taken.append("convert")
-                lines += [
-                    "Convert finished:",
-                    f"  matched={res.get('matched')} ok={res.get('converted_ok')} skip={res.get('skipped_existing')} failed={res.get('failed')}",
-                    f"  started_at={res.get('started_at')} ended_at={res.get('ended_at')}",
-                    "",
-                ]
-
-            # 2) Translate
+                res = self.svc.convert_run(cfg, progress=progress, should_cancel=should_cancel)
+                results["convert"] = res
+                if isinstance(res, dict) and res.get("cancelled"):
+                    return {"cancelled": True, **results}
             if self.translate_cb.isChecked():
                 engine = self.translator_combo.currentText().strip()
                 engine_opt = None if engine == "auto" else engine
-                # translate_only is implied by whether Convert ran
                 translate_only = not self.convert_cb.isChecked()
                 make_en = self.make_en_cb.isChecked()
                 tres = self.svc.translate_run(
@@ -388,26 +512,63 @@ class ConvertTab(QWidget):
                     make_english=make_en,
                     translate_only=translate_only,
                     translator=engine_opt,
+                    progress=progress,
+                    should_cancel=should_cancel,
                 )
-                actions_taken.append("translate")
-                code = tres.get("code")
-                report = tres.get("report") or {}
-                tr = report.get("translation") if isinstance(report, dict) else None
-                lines.append(f"Translate exit code: {code}")
-                if isinstance(tr, dict):
-                    created = tr.get("created")
-                    skipped = tr.get("skipped_exists")
-                    failed = tr.get("failed")
-                    lines.append(f"  created={created} skipped={skipped} failed={failed}")
-                    if tr.get("error"):
-                        lines.append(f"  error={tr.get('error')}")
-                rp = tres.get("report_path")
-                if rp:
-                    lines.append(f"  report={rp}")
+                results["translate"] = tres
+            return results
 
-            if actions_taken:
-                self.output.setPlainText("\n".join(lines))
-            else:
-                self.output.setPlainText("No actions executed.")
-        except Exception as e:
-            self.output.setPlainText(f"Run failed: {e}")
+        def on_result(results: dict[str, Any]):
+            try:
+                if results.get("cancelled"):
+                    prev = self.output.toPlainText()
+                    self.output.setPlainText(prev + ("\n" if prev else "") + "Cancelled.")
+                    return
+                lines: list[str] = []
+                if "convert" in results:
+                    res = results["convert"] or {}
+                    if res.get("cancelled"):
+                        lines.append("Convert: cancelled.")
+                    else:
+                        lines += [
+                            "Convert finished:",
+                            f"  matched={res.get('matched')} ok={res.get('converted_ok')} skip={res.get('skipped_existing')} failed={res.get('failed')}",
+                            f"  started_at={res.get('started_at')} ended_at={res.get('ended_at')}",
+                            "",
+                        ]
+                if "translate" in results:
+                    tres = results["translate"] or {}
+                    if tres.get("cancelled"):
+                        lines.append("Translate: cancelled.")
+                    else:
+                        code = tres.get("code")
+                        report = tres.get("report") or {}
+                        tr = report.get("translation") if isinstance(report, dict) else None
+                        lines.append(f"Translate exit code: {code}")
+                        if isinstance(tr, dict):
+                            created = tr.get("created")
+                            skipped = tr.get("skipped_exists")
+                            failed = tr.get("failed")
+                            lines.append(f"  created={created} skipped={skipped} failed={failed}")
+                        rp = tres.get("report_path")
+                        if rp:
+                            lines.append(f"  report={rp}")
+                prev = self.output.toPlainText()
+                nl = "\n" if prev else ""
+                self.output.setPlainText(prev + nl + "\n".join(lines) if lines else prev)
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        def on_error(err: str):
+            try:
+                self.output.setPlainText(f"Run failed: {err}")
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        t, w = start_worker(job, on_log=self._append_log, on_result=on_result, on_error=on_error)
+        self._jobs.append((t, w))
+        self._current = (t, w)

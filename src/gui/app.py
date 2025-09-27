@@ -40,6 +40,11 @@ def main() -> int:
     apply_theme(app, force=forced)
 
     win = MainWindow()
+    # Ensure background jobs are cancelled on shutdown as an extra safety net
+    try:
+        app.aboutToQuit.connect(win.cancel_all_jobs)  # type: ignore[attr-defined]
+    except Exception:
+        pass
     win.show()
     return app.exec()
 

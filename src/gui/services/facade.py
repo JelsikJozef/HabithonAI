@@ -6,7 +6,7 @@ This isolates Qt views from application logic and keeps call contracts simple.
 """
 
 from dataclasses import asdict, is_dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Callable
 
 from preprocessing.app import convert_only
 from anonymization.adapters.container import build_default
@@ -49,16 +49,82 @@ def _to_dict(obj: Any) -> Any:
     return obj
 
 
+def _is_cancelled(should_cancel: Callable[[], bool] | None) -> bool:
+    try:
+        return bool(should_cancel and should_cancel())
+    except Exception:
+        return False
+
+
 class GuiServices:
     """Synchronous service calls; views should offload to worker threads when long-running."""
 
     # --- Preprocessing ---
-    def convert_plan(self, cfg: Mapping[str, Any]) -> dict[str, Any]:
+    def convert_plan(
+        self,
+        cfg: Mapping[str, Any],
+        progress: Callable[[str], None] | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Compute a dry-run plan for Convert without writing any files.
+
+        Returns a dict with keys: candidates (list) and summary {matched, would_convert, would_skip_existing}.
+        """
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
+        scan = dict(cfg.get("scan", {})) if isinstance(cfg.get("scan"), Mapping) else {}
+        progress and progress(
+            "Plan: scanning source with options -> "
+            f"src={cfg.get('src')} out={cfg.get('out')} recurse={bool(scan.get('recurse', True))}"
+        )
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
         plan = convert_only.plan_folder(cfg["src"], cfg["out"], cfg)
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True, "partial": _to_dict(plan)}
+        # Brief summary to logs
+        try:
+            sm = plan.summary
+            progress and progress(
+                f"Plan summary: matched={sm.matched} would_convert={sm.would_convert} would_skip_existing={sm.would_skip_existing}"
+            )
+        except Exception:
+            pass
         return _to_dict(plan)
 
-    def convert_run(self, cfg: Mapping[str, Any]) -> dict[str, Any]:
+    def convert_run(
+        self,
+        cfg: Mapping[str, Any],
+        progress: Callable[[str], None] | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
+        # Provide richer context on what will happen
+        scan = dict(cfg.get("scan", {})) if isinstance(cfg.get("scan"), Mapping) else {}
+        write = dict(cfg.get("write", {})) if isinstance(cfg.get("write"), Mapping) else {}
+        runtime = dict(cfg.get("runtime", {})) if isinstance(cfg.get("runtime"), Mapping) else {}
+        progress and progress(
+            "Convert: starting with options -> "
+            f"src={cfg.get('src')} out={cfg.get('out')} recurse={bool(scan.get('recurse', True))} "
+            f"overwrite={bool(write.get('overwrite', False))} workers={int(runtime.get('workers', 1))}"
+        )
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
+        # Note: convert_only.convert_folder is not cancellable internally; will complete current stage
         res = convert_only.convert_folder(cfg["src"], cfg["out"], cfg)
+        try:
+            progress and progress(
+                f"Convert summary: matched={res.matched} ok={res.converted_ok} "
+                f"skip={res.skipped_existing} failed={res.failed}"
+            )
+        except Exception:
+            pass
+        progress and progress("Convert finished.")
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True, "partial": _to_dict(res)}
         return _to_dict(res)
 
     def translate_run(
@@ -68,18 +134,21 @@ class GuiServices:
         make_english: bool,
         translate_only: bool,
         translator: str | None = None,
+        progress: Callable[[str], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
-        """Run translate stage via the CLI in-process.
+        """Run translate stage via the CLI in a subprocess with cancellable streaming.
 
-        Returns a dict with keys: code (int), report (dict | None).
+        Returns a dict with keys: code (int), report (dict | None), report_path (str).
         """
-        try:
-            from preprocessing.presentation import cli as _cli  # type: ignore
-        except Exception as e:  # pragma: no cover - environment import issue
-            return {"code": 3, "error": f"CLI unavailable: {e}", "report": None}
+        import json, os, sys, shlex, subprocess
+        from datetime import datetime as _dt
 
-        # Assemble argv from cfg
+        # Build argv (module mode): python -m preprocessing.presentation.cli ...
         argv: list[str] = [
+            sys.executable,
+            "-m",
+            "preprocessing.presentation.cli",
             "--src",
             str(cfg.get("src", "")),
             "--out",
@@ -97,9 +166,8 @@ class GuiServices:
             argv.append("--no-recurse")
         # Logging/progress
         ll = str(cfg.get("ui", {}).get("log_level", "INFO"))
-        pr = str(cfg.get("ui", {}).get("progress", "auto"))
+        pr = str(cfg.get("ui", {}).get("progress", "plain"))  # plain for easier streaming
         argv += ["--log-level", ll, "--progress", pr]
-
         # Translation flags
         if make_english:
             argv.append("--make-english")
@@ -107,8 +175,7 @@ class GuiServices:
             argv.append("--translate-only")
         if translator:
             argv += ["--translator", translator]
-
-        # LangID overrides from cfg (optional)
+        # LangID overrides
         langid = dict(cfg.get("langid", {})) if isinstance(cfg.get("langid"), Mapping) else {}
         cands = langid.get("candidates")
         if isinstance(cands, (list, tuple)) and cands:
@@ -123,62 +190,34 @@ class GuiServices:
         if isinstance(mn, int) and mn > 0:
             argv += ["--lang-min-chars", str(mn)]
 
-        # Advanced routing overrides from cfg (new)
+        # Routing env overrides
         routing = dict(cfg.get("routing", {})) if isinstance(cfg.get("routing"), Mapping) else {}
         original_env = {}
+        env = os.environ.copy()
         if routing:
-            # Add routing environment variables to pass settings to the CLI
-            import os
 
-            # Set routing environment variables
-            tau_low = routing.get("tau_low")
-            if isinstance(tau_low, (int, float)):
-                key = "HABITHON_ROUTING_TAU_LOW"
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = str(float(tau_low))
+            def _set_env(key: str, val: str):
+                original_env[key] = env.get(key)
+                env[key] = val
 
-            delta_close = routing.get("delta_close")
-            if isinstance(delta_close, (int, float)):
-                key = "HABITHON_ROUTING_DELTA_CLOSE"
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = str(float(delta_close))
+            if (v := routing.get("tau_low")) is not None:
+                _set_env("HABITHON_ROUTING_TAU_LOW", str(float(v)))
+            if (v := routing.get("delta_close")) is not None:
+                _set_env("HABITHON_ROUTING_DELTA_CLOSE", str(float(v)))
+            if (v := routing.get("tau_en")) is not None:
+                _set_env("HABITHON_ROUTING_TAU_EN", str(float(v)))
+            if (v := routing.get("similarity_noop_threshold")) is not None:
+                _set_env("HABITHON_ROUTING_SIM_NOOP", str(float(v)))
+            probe = routing.get("probe") or {}
+            if isinstance(probe, Mapping):
+                if (v := probe.get("k")) is not None:
+                    _set_env("HABITHON_ROUTING_PROBE_K", str(int(v)))
+                if (v := probe.get("slice_chars")) is not None:
+                    _set_env("HABITHON_ROUTING_PROBE_SLICE_CHARS", str(int(v)))
+            if (v := routing.get("max_retries")) is not None:
+                _set_env("HABITHON_ROUTING_MAX_RETRIES", str(int(v)))
 
-            tau_en = routing.get("tau_en")
-            if isinstance(tau_en, (int, float)):
-                key = "HABITHON_ROUTING_TAU_EN"
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = str(float(tau_en))
-
-            similarity_noop = routing.get("similarity_noop_threshold")
-            if isinstance(similarity_noop, (int, float)):
-                key = "HABITHON_ROUTING_SIM_NOOP"
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = str(float(similarity_noop))
-
-            probe = routing.get("probe", {})
-            if isinstance(probe, dict):
-                probe_k = probe.get("k")
-                if isinstance(probe_k, int):
-                    key = "HABITHON_ROUTING_PROBE_K"
-                    original_env[key] = os.environ.get(key)
-                    os.environ[key] = str(int(probe_k))
-
-                probe_slice = probe.get("slice_chars")
-                if isinstance(probe_slice, int):
-                    key = "HABITHON_ROUTING_PROBE_SLICE_CHARS"
-                    original_env[key] = os.environ.get(key)
-                    os.environ[key] = str(int(probe_slice))
-
-            max_retries = routing.get("max_retries")
-            if isinstance(max_retries, int):
-                key = "HABITHON_ROUTING_MAX_RETRIES"
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = str(int(max_retries))
-
-        # Optional report: use outputs/logs/cli_run.json under CWD
-        import json, os
-        from datetime import datetime as _dt
-
+        # Report path
         report_path = os.path.join(
             os.getcwd(),
             "outputs",
@@ -187,18 +226,76 @@ class GuiServices:
         )
         argv += ["--report", report_path]
 
-        # Execute CLI with routing environment variables set
+        # Run as subprocess and stream logs
+        progress and progress("CLI argv: " + " ".join(shlex.quote(a) for a in argv))
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
         try:
-            code = _cli.main(argv)
-        finally:
-            # Restore original environment variables
-            if routing:
-                for key, original_value in original_env.items():
-                    if original_value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = original_value
+            # Inherit env and ensure PYTHONPATH includes repo/src for local imports
+            env = os.environ.copy()
+            try:
+                from pathlib import Path as _P
 
+                repo_root = _P(__file__).resolve().parents[3]
+                src_dir = str(repo_root / "src")
+                existing = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = src_dir if not existing else f"{src_dir}:{existing}"
+            except Exception:
+                pass
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+                bufsize=1,
+            )
+        except Exception as e:
+            return {
+                "code": 3,
+                "error": f"Failed to start CLI: {e}",
+                "report": None,
+                "report_path": report_path,
+            }
+
+        code = None
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip("\r\n")
+                if line:
+                    progress and progress(line)
+                if _is_cancelled(should_cancel):
+                    progress and progress(
+                        "Cancellation requested: terminating translate subprocess…"
+                    )
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=5)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    break
+            # Ensure process ended
+            try:
+                code = proc.wait(timeout=5)
+            except Exception:
+                code = proc.poll()
+        finally:
+            try:
+                if proc.stdout:
+                    proc.stdout.close()
+            except Exception:
+                pass
+            # Restore env if we modified it (not strictly needed since we copied)
+            pass
+
+        # Load report if present
         payload: dict[str, Any] | None = None
         try:
             if os.path.exists(report_path):
@@ -206,6 +303,14 @@ class GuiServices:
         except Exception:
             payload = None
 
+        if code is None:
+            code = 137 if _is_cancelled(should_cancel) else 1
+        progress and progress(f"Translate finished with exit code {int(code)}.")
+        if _is_cancelled(should_cancel):
+            return {
+                "cancelled": True,
+                "partial": {"code": int(code), "report": payload, "report_path": report_path},
+            }
         return {"code": int(code), "report": payload, "report_path": report_path}
 
     # --- Language detection (enhanced) ---
@@ -216,21 +321,16 @@ class GuiServices:
         candidates: list[str] | None = None,
         max_chars: int | None = None,
         min_chars: int | None = None,
+        progress: Callable[[str], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
-        """Detect language of a single document using the pipeline's detector.
-
-        Behavior:
-            - Converts non-Markdown inputs to Markdown in-memory using existing adapters.
-            - Uses FastText LID (lid.176.bin) with the same defaults as the pipeline.
-
-        Returns:
-            dict with keys: {"path", "lang", "confidence", "engine", "chars_used"}.
-        """
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
         from pathlib import Path
         from datetime import datetime as _dt
         import os, sys, platform
 
-        # Prepare diagnostics
+        progress and progress("Loading language detector…")
         diag: dict[str, Any] = {
             "started": _dt.now().astimezone().isoformat(),
             "mode": "basic",
@@ -284,6 +384,9 @@ class GuiServices:
             candidates=list(cfg_candidates or []),
         )
 
+        progress and progress("Reading/normalizing input…")
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
         # 2) Read or convert file to Markdown text
         p = Path(str(file_path))
         if not p.exists() or not p.is_file():
@@ -297,6 +400,9 @@ class GuiServices:
             "size": int(p.stat().st_size),
             "mtime": _dt.fromtimestamp(p.stat().st_mtime).isoformat(),
         }
+        progress and progress(
+            f"Input file: path={p} ext=.{ext} size={diag['file_info']['size']} bytes"
+        )
         try:
             if ext in {"md", "markdown", "txt"}:
                 md_text = p.read_text(encoding="utf-8", errors="ignore")
@@ -342,6 +448,13 @@ class GuiServices:
             return {"error": f"Failed to read/convert file: {e} (see {log_path})"}
 
         # 3) Detect language with no fallback
+        progress and progress(
+            "Running FastText detection with "
+            f"candidates={cfg_candidates or '-'} max_chars={int(langid_cfg.get('max_chars', 5000))} "
+            f"min_chars={int(langid_cfg.get('min_chars', 50))}…"
+        )
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
         try:
             # Proactively load to capture load errors distinctly
             _ftdet.load()
@@ -369,6 +482,9 @@ class GuiServices:
             log_path = _write_langid_log(diag)
             return {"error": f"Detection failed: {e} (see {log_path})"}
 
+        progress and progress(
+            f"Detection finished: lang={diag['result']['lang']} conf={float(diag['result']['confidence']):.3f}"
+        )
         return {
             "path": str(p),
             "lang": str(diag["result"]["lang"]),
@@ -386,6 +502,8 @@ class GuiServices:
         candidates: list[str] | None = None,
         max_chars: int | None = None,
         min_chars: int | None = None,
+        progress: Callable[[str], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """Return top-k language candidates and selection for a single document.
 
@@ -395,6 +513,7 @@ class GuiServices:
         from datetime import datetime as _dt
         import os, sys, platform
 
+        progress and progress("Loading detector and reading file…")
         diag: dict[str, Any] = {
             "started": _dt.now().astimezone().isoformat(),
             "mode": "topk",
@@ -493,6 +612,17 @@ class GuiServices:
             log_path = _write_langid_log(diag)
             return {"error": f"Failed to read/convert file: {e} (see {log_path})"}
 
+        progress and progress(
+            f"Input file: path={p} ext=.{ext} size={int(p.stat().st_size)} bytes; detecting top-{int(k) if k is not None else 5}"
+        )
+        # 3) Detect language with no fallback
+        progress and progress(
+            "Running top-k detection with "
+            f"candidates={cfg_candidates or '-'} max_chars={int(langid_cfg.get('max_chars', 5000))} "
+            f"min_chars={int(langid_cfg.get('min_chars', 50))}…"
+        )
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
         try:
             detector.load()
             result = detector.detect_topk(
@@ -519,6 +649,9 @@ class GuiServices:
             log_path = _write_langid_log(diag)
             return {"error": f"Detection failed: {e} (see {log_path})"}
 
+        progress and progress(
+            f"Top-k detection finished: primary={result.get('lang_code')} conf={float(result.get('confidence', 0.0) or 0.0):.3f}"
+        )
         return {
             "path": str(p),
             "lang_code": result.get("lang_code"),
@@ -539,12 +672,11 @@ class GuiServices:
         min_chars: int | None = None,
         routing_config: Mapping[str, Any] | None = None,
         enable_translation_test: bool = False,
+        progress: Callable[[str], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
-        """Analyze language with top-k and simple routing heuristics.
-
-        Returns dict with keys: path, lang_code, confidence, topk, flags, chars_used,
-        routing={probe_triggered, selected_src, probe_reason?, translation_test?}.
-        """
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
         from pathlib import Path
         from datetime import datetime as _dt
         import os, sys, platform
@@ -555,7 +687,9 @@ class GuiServices:
             "file": str(file_path),
             "routing_config": dict(routing_config or {}),
         }
+        progress and progress("Loading detector and preparing analysis…")
 
+        # 1) Load settings and detector (same as CLI)
         try:
             from preprocessing import settings_translation as st  # type: ignore
             from preprocessing.adapters.langid.fasttext_langid import FastTextLangId  # type: ignore
@@ -575,6 +709,13 @@ class GuiServices:
             langid_cfg["max_chars"] = int(max_chars)
         if isinstance(min_chars, int) and min_chars > 0:
             langid_cfg["min_chars"] = int(min_chars)
+
+        # Routing heuristics configuration (compute early for logging)
+        rc = dict(routing_config or {})
+        tau_low = float(rc.get("tau_low", 0.70))
+        delta_close = float(rc.get("delta_close", 0.05))
+        tau_en = float(rc.get("tau_en", 0.90))
+        sim_noop = float(rc.get("similarity_noop_threshold", 0.92))
 
         diag["config"] = {
             "model_path": model_path,
@@ -652,7 +793,16 @@ class GuiServices:
             log_path = _write_langid_log(diag)
             return {"error": f"Failed to read/convert file: {e} (see {log_path})"}
 
-        # Base top-k detection
+        progress and progress(
+            f"Input file: path={p} ext=.{ext} size={p.stat().st_size} bytes; advanced routing k={int(k) if k is not None else 5}"
+        )
+        # 3) Detect language with no fallback
+        progress and progress(
+            "Running advanced top-k with routing heuristics … "
+            f"candidates={cfg_candidates or '-'} tau_low={tau_low:.2f} delta_close={delta_close:.2f}"
+        )
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
         try:
             detector.load()
             base = detector.detect_topk(
@@ -683,12 +833,7 @@ class GuiServices:
         flags = dict(base.get("flags", {}))
 
         # Routing heuristics
-        rc = dict(routing_config or {})
-        tau_low = float(rc.get("tau_low", 0.70))
-        delta_close = float(rc.get("delta_close", 0.05))
-        tau_en = float(rc.get("tau_en", 0.90))
-        sim_noop = float(rc.get("similarity_noop_threshold", 0.92))
-
+        routing: dict[str, Any] = {}
         probe_triggered = confidence < tau_low
         probe_reason = "low_confidence" if probe_triggered else None
         if not probe_triggered and len(topk_list) >= 2:
@@ -699,16 +844,22 @@ class GuiServices:
                 probe_reason = "close_top2"
         selected_src = str(lang_code or "")
 
-        routing: dict[str, Any] = {
-            "probe_triggered": bool(probe_triggered),
-            "selected_src": selected_src,
-        }
+        routing.update(
+            {
+                "probe_triggered": bool(probe_triggered),
+                "selected_src": selected_src,
+            }
+        )
         if probe_triggered and probe_reason:
             routing["probe_reason"] = probe_reason
 
         # Optional translation quality test (approximation without translating)
         if enable_translation_test:
             try:
+                from preprocessing.adapters.langid.english_detector_fasttext import (  # type: ignore
+                    FastTextEnglishDetector,
+                )
+
                 en_det = FastTextEnglishDetector(model_path)
                 en_conf = float(en_det.english_confidence(md_text))
             except Exception:
@@ -738,6 +889,9 @@ class GuiServices:
         diag["status"] = "OK"
         log_path = _write_langid_log(diag)
 
+        progress and progress(
+            f"Advanced analysis finished: primary={lang_code} conf={confidence:.3f} probe={routing.get('probe_triggered')}"
+        )
         return {
             "path": str(p),
             "lang_code": lang_code,
@@ -777,7 +931,17 @@ class GuiServices:
             out.append(meta)
         return out
 
-    def anon_detect(self, text: str, language: str | None = None) -> dict[str, Any]:
+    def anon_detect(
+        self,
+        text: str,
+        language: str | None = None,
+        progress: Callable[[str], None] | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
+        progress and progress("Running PII detection…")
         detectors, _ = build_default()
         meta = self._detectors_meta(detectors)
         r = detect_all(text, detectors, language=language)
@@ -787,6 +951,7 @@ class GuiServices:
         for e in entities:
             det = e.get("detector") or "?"
             counts[det] = counts.get(det, 0) + 1
+        progress and progress(f"Detected {len(entities)} entities.")
         return {
             "text": r.text,
             "entities": entities,
@@ -796,8 +961,17 @@ class GuiServices:
         }
 
     def anon_pseudonymize(
-        self, text: str, context_id: str, language: str | None = None
+        self,
+        text: str,
+        context_id: str,
+        language: str | None = None,
+        progress: Callable[[str], None] | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
+        progress and progress("Pseudonymizing text…")
         detectors, vault = build_default()
         meta = self._detectors_meta(detectors)
         r = pseudonymize(text, detectors, vault, context_id=context_id, language=language)
@@ -807,6 +981,7 @@ class GuiServices:
         for m in mappings:
             t = m.get("type") or "?"
             by_type[t] = by_type.get(t, 0) + 1
+        progress and progress(f"Produced {len(mappings)} mappings.")
         return {
             "original_text": r.original_text,
             "pseudonymized_text": r.pseudonymized_text,
@@ -817,7 +992,17 @@ class GuiServices:
             "mapping_counts": by_type,
         }
 
-    def anon_deanonymize(self, text: str, context_id: str) -> dict[str, Any]:
+    def anon_deanonymize(
+        self,
+        text: str,
+        context_id: str,
+        progress: Callable[[str], None] | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
+        progress and progress("Restoring original text from mappings…")
         _detectors, vault = build_default()
         r = deanonymize(text, vault, context_id=context_id)
         used = [m.__dict__ for m in r.mappings_used]
@@ -825,6 +1010,7 @@ class GuiServices:
         for m in used:
             t = m.get("type") or "?"
             by_type[t] = by_type.get(t, 0) + 1
+        progress and progress(f"Used {len(used)} mappings.")
         return {
             "anonymized_text": r.anonymized_text,
             "restored_text": r.restored_text,
@@ -840,11 +1026,12 @@ class GuiServices:
         context_id: str,
         tenant_id: str | None = None,
         language: str | None = None,
+        progress: Callable[[str], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
-        """Deterministic anonymization using HMAC hash tokens.
-
-        Replaces detected PII with deterministic hash tokens and persists mappings in the vault.
-        """
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
+        progress and progress("Deterministic anonymization…")
         detectors, vault = build_default()
         meta = self._detectors_meta(detectors)
         crypto = Crypto()
@@ -862,6 +1049,7 @@ class GuiServices:
         for m in mappings:
             t = m.get("type") or "?"
             by_type[t] = by_type.get(t, 0) + 1
+        progress and progress(f"Persisted {len(mappings)} mappings.")
         return {
             "original_text": r.original_text,
             "anonymized_text": r.pseudonymized_text,
@@ -873,122 +1061,125 @@ class GuiServices:
             "mapping_counts": by_type,
         }
 
-    def anon_presidio_readiness(self) -> dict[str, Any]:
-        """Return a diagnostic snapshot of Presidio / spaCy readiness.
+    def anon_presidio_readiness(
+        self,
+        progress: Callable[[str], None] | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
+        import json, os, sys, subprocess, shlex
 
-        Checks:
-        - Import of presidio_analyzer
-        - Import of spaCy
-        - Availability (loadable) of configured spaCy models in PiiSettings
-        - Whether regex fallback is enabled
+        progress and progress("Checking Presidio and spaCy dependencies (isolated)…")
 
-        Returns a dict with keys:
-        {
-          'presidio_imported': bool,
-          'presidio_error': str | None,
-          'spacy_imported': bool,
-          'spacy_error': str | None,
-          'models': [ {name, installed, error?} ],
-          'supported_languages_configured': [...],
-          'fallback_model': str | None,
-          'regex_fallback_enabled': bool,
-          'ready': bool,
-          'suggested_commands': [str, ...],
-        }
-        """
-        from anonymization.app.config.pii_settings import PiiSettings
-        import os
-
-        settings = PiiSettings.from_env()
-
-        presidio_imported = False
-        presidio_error: str | None = None
+        # Subprocess script: import presidio_analyzer/spacy and probe models safely
+        script = r"""
+import json, os, importlib.util
+res = {
+  "presidio_imported": False,
+  "presidio_error": None,
+  "spacy_imported": False,
+  "spacy_error": None,
+  "models": [],
+  "supported_languages_configured": [],
+  "fallback_model": None,
+  "regex_fallback_enabled": (str(os.getenv("ANON_PRESIDIO_DISABLE_FALLBACK","0")).strip().lower() not in {"1","true","yes","on"}),
+  "ready": False,
+  "suggested_commands": [],
+  "env": {}
+}
+# Config
+langs = {"en":"en_core_web_sm","de":"de_core_news_sm","sk": os.getenv("ANON_PRESIDIO_FALLBACK_MODEL","xx_ent_wiki_sm") or "xx_ent_wiki_sm"}
+# Allow overrides via env
+spec = (os.getenv("ANON_PRESIDIO_LANGS") or "").strip()
+for part in spec.split(","):
+    part = part.strip()
+    if not part:
+        continue
+    if ":" in part:
+        k,v = part.split(":",1)
+        langs[k.strip()] = v.strip()
+fb = os.getenv("ANON_PRESIDIO_FALLBACK_MODEL") or "xx_ent_wiki_sm"
+res["fallback_model"] = fb
+res["supported_languages_configured"] = sorted(langs.keys())
+# Import presidio
+try:
+    import presidio_analyzer  # noqa: F401
+    res["presidio_imported"] = True
+except Exception as e:
+    res["presidio_error"] = str(e)
+# Import spacy and probe models
+try:
+    import spacy as _sp
+    res["spacy_imported"] = True
+    attempted = set()
+    all_models = list(dict.fromkeys(list(langs.values()) + [fb]))
+    for m in all_models:
+        if not m or m in attempted:
+            continue
+        attempted.add(m)
+        ok = False
+        err = None
         try:
-            import presidio_analyzer  # type: ignore  # noqa: F401
-
-            presidio_imported = True
-        except Exception as e:  # pragma: no cover - environment dependent
-            presidio_error = str(e)
-
-        spacy_imported = False
-        spacy_error: str | None = None
+            _sp.load(m)
+            ok = True
+        except Exception as ex:
+            err = str(ex)
+        res["models"].append({"name": m, "installed": ok, "error": err})
+except Exception as e:
+    res["spacy_error"] = str(e)
+# Ready flag
+res["ready"] = bool(res["presidio_imported"] and res["spacy_imported"] and all((m.get("installed") for m in res.get("models") or [])))
+# Suggestions
+if not res["presidio_imported"]:
+    res["suggested_commands"].append("pip install presidio-analyzer spacy")
+if res["spacy_imported"]:
+    missing = [m["name"] for m in res.get("models") or [] if not m.get("installed")]
+    for m in missing:
+        res["suggested_commands"].append(f"python -m spacy download {m}")
+else:
+    res["suggested_commands"].append("pip install spacy")
+# Env hints
+for k in [
+  "ANON_PRESIDIO_LANGS","ANON_PRESIDIO_FALLBACK_MODEL","ANON_PRESIDIO_DISABLE_FALLBACK","ANON_PRESIDIO_PATTERNS"
+]:
+    v = os.getenv(k)
+    if v is not None:
+        res.setdefault("env",{})[k] = v
+print(json.dumps(res))
+"""
         try:
-            import spacy  # type: ignore
-
-            spacy_imported = True
-        except Exception as e:  # pragma: no cover
-            spacy_error = str(e)
-            spacy = None  # type: ignore
-
-        models_checked: list[dict[str, Any]] = []
-        missing_models: list[str] = []
-        attempted: set[str] = set()
-        if spacy_imported:
-            # Unique list of configured + fallback
-            all_models = list(
-                dict.fromkeys(list(settings.language_models.values()) + [settings.fallback_model])
+            proc = subprocess.run(
+                [sys.executable, "-c", script], capture_output=True, text=True, check=False
             )
-            for model in all_models:
-                if not model or model in attempted:
-                    continue
-                attempted.add(model)
-                ok = False
-                err: str | None = None
-                try:  # pragma: no cover - depends on local environment
-                    import spacy as _sp
+        except Exception as e:
+            return {"error": f"Failed to spawn readiness probe: {e}"}
 
-                    _sp.load(model)
-                    ok = True
-                except Exception as e:
-                    err = str(e)
-                    missing_models.append(model)
-                models_checked.append({"name": model, "installed": ok, "error": err})
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
 
-        regex_fallback_enabled = not settings.disable_regex_fallback
-
-        ready = (
-            presidio_imported
-            and spacy_imported
-            and all(m.get("installed") for m in models_checked if m.get("name"))
-        )
-
-        suggested_cmds: list[str] = []
-        if not presidio_imported:
-            suggested_cmds.append("pip install presidio-analyzer presidio-recognizers spacy")
-        if spacy_imported and missing_models:
-            for m in missing_models:
-                # spaCy model downloads typically via python -m spacy download
-                suggested_cmds.append(f"python -m spacy download {m}")
-        elif not spacy_imported:
-            suggested_cmds.append("pip install spacy")
-
-        env_hint = {
-            k: os.environ.get(k)
-            for k in [
-                "ANON_PRESIDIO_LANGS",
-                "ANON_PRESIDIO_FALLBACK_MODEL",
-                "ANON_PRESIDIO_DISABLE_FALLBACK",
-                "ANON_PRESIDIO_PATTERNS",
-            ]
-            if os.environ.get(k) is not None
-        }
-
-        return {
-            "presidio_imported": presidio_imported,
-            "presidio_error": presidio_error,
-            "spacy_imported": spacy_imported,
-            "spacy_error": spacy_error,
-            "models": models_checked,
-            "supported_languages_configured": sorted(settings.language_models.keys()),
-            "fallback_model": settings.fallback_model,
-            "regex_fallback_enabled": regex_fallback_enabled,
-            "ready": ready,
-            "suggested_commands": suggested_cmds,
-            "env": env_hint,
-        }
+        out = (proc.stdout or "").strip()
+        err = (proc.stderr or "").strip()
+        if err:
+            progress and progress("[probe-stderr] " + err.splitlines()[-1])
+        if proc.returncode != 0:
+            return {"error": f"Probe failed with code {proc.returncode}", "stderr": err}
+        try:
+            diag = json.loads(out) if out else {}
+        except Exception as e:
+            diag = {"error": f"Probe returned invalid JSON: {e}", "raw": out}
+        progress and progress("Presidio readiness check finished.")
+        return diag
 
     # --- Batch Anonymization (new) -------------------------------------------------
-    def anon_batch_plan(self, cfg: Mapping[str, Any]) -> dict[str, Any]:
+    def anon_batch_plan(
+        self,
+        cfg: Mapping[str, Any],
+        progress: Callable[[str], None] | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         """Plan which Markdown files would be anonymized.
 
         cfg keys expected:
@@ -1024,8 +1215,13 @@ class GuiServices:
         if os.path.abspath(src) == os.path.abspath(out):  # safety
             return {"error": "Source and Output folders must differ"}
 
+        progress and progress("Scanning source folder for Markdown files…")
         for root, dirs, files in os.walk(src):
+            if _is_cancelled(should_cancel):
+                break
             for fn in files:
+                if _is_cancelled(should_cancel):
+                    break
                 low = fn.lower()
                 # skip already anonymized outputs
                 if any(low.endswith(sfx) for sfx in skip_suffixes):
@@ -1055,7 +1251,10 @@ class GuiServices:
                     would_skip_existing += 1
             if not recurse:
                 break
-
+        cancelled = _is_cancelled(should_cancel)
+        progress and progress(
+            f"Plan: matched={len(matched)} would_process={would_process} would_skip={would_skip_existing}"
+        )
         return {
             "src": src,
             "out": out,
@@ -1065,129 +1264,145 @@ class GuiServices:
             "would_skip_existing": would_skip_existing,
             "overwrite": overwrite,
             "started_at": _dt.now().isoformat(),
+            "cancelled": cancelled,
         }
 
-    def anon_batch_run(self, cfg: Mapping[str, Any]) -> dict[str, Any]:
-        """Run batch anonymization over a folder of Markdown files.
-
-        Returns summary with counts and minimal per-file statuses.
-        """
-        import os, traceback
+    def anon_batch_run(
+        self,
+        cfg: Mapping[str, Any],
+        progress: Callable[[str], None] | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        import os, sys, shlex, subprocess, json
         from datetime import datetime as _dt
-        from shared.hashing import document_fingerprint
 
-        plan = self.anon_batch_plan(cfg)
-        if plan.get("error"):
-            return plan
-
-        src = plan["src"]
-        out = plan["out"]
-        mode = plan["mode"]
-        overwrite = bool(cfg.get("overwrite", False))
-        language = cfg.get("language") or None
-        tenant_id = cfg.get("tenant_id") or None
-
+        # Prepare report path for final JSON
+        report_path = os.path.join(
+            os.getcwd(),
+            "outputs",
+            "logs",
+            f"gui_anon_batch_{_dt.now().strftime('%Y%m%d_%H%M%S')}.json",
+        )
         try:
-            os.makedirs(out, exist_ok=True)
+            os.makedirs(os.path.dirname(report_path), exist_ok=True)
         except Exception:
-            return {"error": f"Failed to create output directory: {out}"}
+            pass
 
-        detectors, vault = build_default()
-        crypto = Crypto()
+        # Build argv for subprocess CLI
+        argv: list[str] = [
+            sys.executable,
+            "-m",
+            "anonymization.presentation.batch_cli",
+            "--src",
+            str(cfg.get("src", "")),
+            "--out",
+            str(cfg.get("out", "")),
+            "--mode",
+            str((cfg.get("mode") or "deterministic")).lower(),
+            "--report",
+            report_path,
+        ]
+        if bool(cfg.get("recurse", True)):
+            argv.append("--recurse")
+        else:
+            argv.append("--no-recurse")
+        if bool(cfg.get("overwrite", False)):
+            argv.append("--overwrite")
+        if lang := (cfg.get("language") or None):
+            argv += ["--language", str(lang)]
+        if (tenant := (cfg.get("tenant_id") or None)) and str(
+            (cfg.get("mode") or "")
+        ).lower() == "deterministic":
+            argv += ["--tenant", str(tenant)]
 
-        processed_ok = 0
-        skipped_existing = 0
-        failed = 0
-        files_status: list[dict[str, Any]] = []
-        by_type: dict[str, int] = {}
-
-        # Recompute iterable of entries (need detailed info)
-        # (Re-run listing quickly to get consistent order)
-        entries = []
-        include_ext = [".md"]
-        skip_suffixes = [".anonymized.md", ".pseudonymized.md", ".restored.md"]
-        recurse = bool(cfg.get("recurse", True))
-        for root, dirs, files in os.walk(src):
-            for fn in files:
-                low = fn.lower()
-                if any(low.endswith(sfx) for sfx in skip_suffixes):
-                    continue
-                ext = os.path.splitext(low)[1]
-                if ext not in include_ext:
-                    continue
-                src_path = os.path.join(root, fn)
-                rel = os.path.relpath(src_path, src)
-                base_no_ext = os.path.splitext(rel)[0]
-                suffix = ".anonymized.md" if mode == "deterministic" else ".pseudonymized.md"
-                out_path = os.path.join(out, base_no_ext + suffix)
-                exists = os.path.exists(out_path)
-                entries.append((src_path, rel, out_path, exists))
-            if not recurse:
-                break
-
-        for src_path, rel, out_path, exists in entries:
-            if exists and not overwrite:
-                skipped_existing += 1
-                files_status.append({"rel": rel, "status": "skipped_exists"})
-                continue
-            # Ensure subdirectory path exists
-            out_dir = os.path.dirname(out_path)
+        # Launch subprocess and stream logs
+        progress and progress("Batch CLI argv: " + " ".join(shlex.quote(a) for a in argv))
+        if _is_cancelled(should_cancel):
+            return {"cancelled": True}
+        try:
+            # Ensure PYTHONPATH includes repo/src for local imports
+            env = os.environ.copy()
             try:
-                os.makedirs(out_dir, exist_ok=True)
+                from pathlib import Path as _P
+
+                repo_root = _P(__file__).resolve().parents[3]
+                src_dir = str(repo_root / "src")
+                existing = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = src_dir if not existing else f"{src_dir}:{existing}"
             except Exception:
-                failed += 1
-                files_status.append({"rel": rel, "status": "error", "error": "mkdir_failed"})
-                continue
-            try:
-                with open(src_path, "r", encoding="utf-8", errors="ignore") as f:
-                    text = f.read()
-                # Derive stable context id
-                st = os.stat(src_path)
-                fp = document_fingerprint(src_path, size_bytes=st.st_size, mtime=st.st_mtime)
-                ctx_id = f"ctx_{fp[:16]}"
-                if mode == "deterministic":
-                    res = domain_anonymize(
-                        text,
-                        detectors,
-                        crypto,
-                        vault,
-                        context_id=ctx_id,
-                        tenant_id=tenant_id,
-                        language=language,
-                    )
-                    out_text = res.pseudonymized_text
-                else:
-                    res = pseudonymize(text, detectors, vault, context_id=ctx_id, language=language)
-                    out_text = res.pseudonymized_text
-                # Aggregate mapping types
-                for m in res.mappings:
-                    t = m.type or "?"
-                    by_type[t] = by_type.get(t, 0) + 1
-                with open(out_path, "w", encoding="utf-8") as wf:
-                    wf.write(out_text)
-                processed_ok += 1
-                files_status.append({"rel": rel, "status": "ok", "context_id": ctx_id})
-            except Exception as e:  # pragma: no cover - runtime safety
-                failed += 1
-                files_status.append(
-                    {
-                        "rel": rel,
-                        "status": "error",
-                        "error": str(e),
-                        "trace": traceback.format_exc(limit=1),
-                    }
-                )
+                pass
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+                bufsize=1,
+            )
+        except Exception as e:
+            return {"error": f"Failed to start batch CLI: {e}"}
 
-        ended_at = _dt.now().isoformat()
-        return {
-            "mode": mode,
-            "src": src,
-            "out": out,
-            "processed_ok": processed_ok,
-            "skipped_existing": skipped_existing,
-            "failed": failed,
-            "total": processed_ok + skipped_existing + failed,
-            "mapping_counts": by_type,
-            "files": files_status[:200],  # cap to avoid huge payload
-            "ended_at": ended_at,
-        }
+        last_json_line: str | None = None
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = (line or "").rstrip("\r\n")
+                if not line:
+                    continue
+                # Capture potential final JSON payload line while forwarding progress
+                if line.startswith("{") and line.endswith("}"):
+                    last_json_line = line
+                else:
+                    progress and progress(line)
+                if _is_cancelled(should_cancel):
+                    progress and progress("Cancellation requested: terminating batch subprocess…")
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=5)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    break
+            try:
+                rc = proc.wait(timeout=5)
+            except Exception:
+                rc = proc.poll()
+        finally:
+            try:
+                if proc.stdout:
+                    proc.stdout.close()
+            except Exception:
+                pass
+
+        if _is_cancelled(should_cancel):
+            # Try to return partial report if available
+            try:
+                if os.path.exists(report_path):
+                    payload = json.loads(open(report_path, "r", encoding="utf-8").read())
+                    payload["cancelled"] = True
+                    return payload
+            except Exception:
+                pass
+            return {"cancelled": True}
+
+        # Prefer report file; fallback to last JSON line
+        payload: dict[str, Any] | None = None
+        try:
+            if os.path.exists(report_path):
+                payload = json.loads(open(report_path, "r", encoding="utf-8").read())
+        except Exception as e:
+            progress and progress(f"Failed to read batch report: {e}")
+        if payload is None and last_json_line:
+            try:
+                payload = json.loads(last_json_line)
+            except Exception:
+                pass
+        if payload is None:
+            return {"error": "Batch CLI did not produce a JSON result"}
+        return payload

@@ -19,10 +19,30 @@ fi
 echo "[INFO] Installing Python packages from $REQ_FILE ..."
 pip install -r "$REQ_FILE"
 
-echo "[INFO] Downloading spaCy models (en, de, multi xx) ..."
-python3 -m spacy download en_core_web_sm || true
-python3 -m spacy download de_core_news_sm || true
-python3 -m spacy download xx_ent_wiki_sm || true
+# Helper to check if a spaCy model package is importable; if not, install via spacy downloader.
+check_spacy_model() {
+  local model="$1"
+  python3 - <<PY
+import importlib.util, sys
+mod = "$model"
+sys.exit(0 if importlib.util.find_spec(mod) is not None else 1)
+PY
+}
+
+maybe_download_model() {
+  local model="$1"
+  if check_spacy_model "$model"; then
+    echo "[INFO] spaCy model '$model' already installed."
+  else
+    echo "[INFO] Downloading spaCy model '$model' via spacy downloader ..."
+    python3 -m spacy download "$model" || true
+  fi
+}
+
+echo "[INFO] Ensuring spaCy models (en, de, xx) are present ..."
+maybe_download_model en_core_web_sm
+maybe_download_model de_core_news_sm
+maybe_download_model xx_ent_wiki_sm
 
 echo "[INFO] Installation complete. Optional steps:"
 echo "  - Set ANON_PRESIDIO_LANGS='en:en_core_web_sm,de:de_core_news_sm,sk:xx_ent_wiki_sm' for explicit mapping"

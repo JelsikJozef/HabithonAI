@@ -1253,14 +1253,15 @@ def _run_translation_phase(
             in_path = Path(getattr(doc, "path"))
             src_root = Path(ctx.src_root)
             out_root = Path(ctx.out_root)
-            # English variants go under out_root/en/<rel>
+            # English variants go under out_root/en/<rel> with '_en' suffix before .md
             try:
                 rel = in_path.resolve().relative_to(src_root.resolve())
             except Exception:
                 # Fallback: treat as flat under out_root/en
                 rel = Path(in_path.name)
             en_root = out_root / "en"
-            out_md_path = (en_root / rel).with_suffix(".md")
+            base = en_root / rel
+            out_md_path = base.with_name(base.stem + "_en.md")
             assets_dir = out_md_path.parent / ctx.assets_subdir
             sidecar_path = (
                 out_md_path.with_suffix(out_md_path.suffix + ".meta.json")
@@ -1396,6 +1397,42 @@ def _run_translation_phase(
     batch = ensure_english_for_batch(
         docs, ports, en_cfg, context={"run_id": datetime.now(UTC).isoformat()}
     )
+
+    # Enforce filename policy: all English Markdown should end with _en.md
+    try:
+        en_root = (cfg.out / "en").resolve()
+        if en_root.exists():
+            for dp, _dns, fns in __import__("os").walk(en_root):
+                from pathlib import Path as _P
+
+                d = _P(dp)
+                for name in fns:
+                    if not name.lower().endswith(".md"):
+                        continue
+                    if name.lower().endswith("_en.md"):
+                        continue
+                    src_path = (d / name).resolve()
+                    tgt = src_path.with_name(src_path.stem + "_en.md")
+                    if tgt.exists():
+                        logging.warning(
+                            "EN suffix policy: target already exists, skipping rename: %s -> %s",
+                            src_path.name,
+                            tgt.name,
+                        )
+                        continue
+                    try:
+                        src_path.rename(tgt)
+                        logging.info("EN suffix policy: renamed %s -> %s", src_path.name, tgt.name)
+                        # Move sidecar metadata if present (inline writer uses .md.meta.json)
+                        sidecar = _P(str(src_path) + ".meta.json")
+                        if sidecar.exists():
+                            sidecar.rename(_P(str(tgt) + ".meta.json"))
+                    except Exception as e:
+                        logging.warning(
+                            "EN suffix policy: rename failed for %s: %s", src_path.name, e
+                        )
+    except Exception as e:
+        logging.warning("EN suffix policy: audit failed: %s", e)
 
     # Render translation summary
     logging.info(

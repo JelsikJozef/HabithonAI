@@ -12,7 +12,12 @@ Overview
 Install (GUI-only)
 - From repo root:
   - pip install -r requirements-gui.txt
+    - This installs Presidio + spaCy and the required spaCy language models (en, de, xx) automatically.
   - Or: pip install PySide6
+    - If you choose this minimal install, also install Presidio and spaCy:
+      - pip install presidio-analyzer spacy
+      - And install at least one spaCy model:
+        - python3 -m spacy download en_core_web_sm
 
 Run (development)
 - The GUI package lives under src/gui. Ensure that the repository's src/ directory
@@ -43,6 +48,9 @@ New UI features
   - Deterministic retry ladder across engines and source languages.
   - Comprehensive routing telemetry in translation reports.
   - Helpful (?) tooltip buttons explaining each parameter's purpose.
+- Background worker + Cancel buttons (all long-running tabs):
+  - Convert, Language Detection, Anonymization, and Anon Batch run in a background thread.
+  - Live logs stream to the output pane; Cancel requests a cooperative stop.
 
 Advanced routing features
 - Preprocess tab: Full integration with translation workflow
@@ -67,6 +75,7 @@ Tabs
 - Preprocess: plan and run convert-only Markdown pipeline (folder -> .md) and translation.
 - Language Detection: detect the primary language of a document (with candidates/window tuning).
 - Anonymization: detect, pseudonymize (with context), and de-anonymize sample text.
+- Anon Batch: folder anonymization (deterministic or pseudonymize) with cooperative cancellation.
 - Jobs: placeholder for history and logs.
 - Settings: environment/session settings and preflight.
 
@@ -101,8 +110,8 @@ Service facade
 Design choices
 - Qt shim: gui.views.qt provides a compatibility layer that imports PySide6 at runtime
   and falls back to stubs so static type/lint checks can run without PySide6 installed.
-- Long-running tasks: current scaffold calls services synchronously; next iterations
-  should move calls to worker threads (QThread/QtConcurrent) with progress.
+- Long-running tasks: implemented via a background worker (QThread) with cooperative
+  cancellation and log forwarding into the UI.
 
 Packaging (optional)
 - macOS app via PyInstaller:
@@ -110,6 +119,6 @@ Packaging (optional)
   - Add data files and model directories as needed.
 
 Next steps
-- Wire progress and cancellable jobs; store history in a small JSON DB under outputs/.
+- Persist job history and logs in a small JSON DB under outputs/.
 - Add table views for results and open-file shortcuts.
 - Add vector-store tab once builder is implemented.

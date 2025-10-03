@@ -15,6 +15,7 @@ from anonymization.app.pseudonymize import pseudonymize
 from anonymization.app.denomize import deanonymize
 from anonymization.adapters.crypto.crypto import Crypto
 from anonymization.domain.anonymizer import anonymize as domain_anonymize
+from shared.llm.openai_client import summarize_keywords, OpenAIClientError  # FIXED import
 
 
 # --- Small utility: write JSON diagnostics to outputs/logs ---
@@ -1406,3 +1407,245 @@ print(json.dumps(res))
         if payload is None:
             return {"error": "Batch CLI did not produce a JSON result"}
         return payload
+
+    def step3_run(
+        self,
+        document_uid: str,
+        *,
+        content_hash: str | None = None,
+        model: str | None = None,
+        timeout_s: int | None = None,
+        progress: Callable[[str], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Run Step 3 summarization/keywords for a given document UID.
+
+        Returns the Step 3 result.json payload dict.
+        """
+        if not document_uid or not str(document_uid).strip():
+            return {"error": "document_uid is required"}
+
+        if should_cancel and should_cancel():
+            return {"cancelled": True}
+
+        try:
+            from preprocessing.analysis.step3_summary import (
+                run_step3,
+                Step3Inputs,
+                Step3Config,
+            )
+        except Exception as e:
+            return {"error": f"Step 3 module unavailable: {e}"}
+
+        cfg = Step3Config()
+        if isinstance(model, str) and model.strip():
+            cfg.model = model.strip()
+        if isinstance(timeout_s, int) and timeout_s > 0:
+            cfg.timeout_s = int(timeout_s)
+
+        ctx = {"run_id": "gui"}
+
+        progress and progress(f"Step3: preparing (uid={document_uid[:20]}...) ")
+        if should_cancel and should_cancel():
+            return {"cancelled": True}
+
+        res = run_step3(
+            Step3Inputs(
+                document_uid=str(document_uid).strip(),
+                content_hash=str(content_hash).strip() if content_hash else None,
+                context=ctx,
+                config=cfg,
+            )
+        )
+
+        # Summarize outcome for the GUI log
+        status = res.get("status")
+        if status == "ok":
+            progress and progress(
+                "Step3: ok — summary and keywords written to artifacts (no content shown here)."
+            )
+        else:
+            errs = ",".join(
+                e.get("code", "?") for e in (res.get("errors") or []) if isinstance(e, dict)
+            )
+            progress and progress(f"Step3: failed — errors=[{errs}] (see outputs/logs for details)")
+
+        if should_cancel and should_cancel():
+            res = {"cancelled": True, "partial": res}
+
+        return res
+
+    def summarize_folder_run(
+        self,
+        cfg: Mapping[str, Any],
+        progress: Callable[[str], None] | None = None,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Run LLM summarization over a folder of anonymized Markdown files.
+
+        cfg keys:
+          - src (str): source folder
+          - pattern (str): glob pattern (e.g., "*.anonymized.md")
+          - overwrite (bool): overwrite existing sidecars
+          - model (str|None): OpenAI model name
+          - timeout_s (int|None): per-file timeout seconds
+
+        For each matched file, writes next to it:
+          - <name>.summary.txt
+          - <name>.keywords.json
+
+        Returns a dict with counts and per-file statuses:
+          {total, ok, skipped, failed, ended_at, files: [{rel, status, error?}], cancelled?}
+        """
+        from pathlib import Path
+        from datetime import datetime as _dt
+        import os, json
+
+        src = str(cfg.get("src") or "").strip()
+        pattern = str(cfg.get("pattern") or "*.anonymized.md").strip()
+        overwrite = bool(cfg.get("overwrite", False))
+        model = cfg.get("model") or None
+        timeout_s = cfg.get("timeout_s")
+        if isinstance(timeout_s, str) and timeout_s.isdigit():
+            timeout_s = int(timeout_s)
+        if not isinstance(timeout_s, (int, type(None))):
+            timeout_s = None
+
+        if not src or not os.path.isdir(src):
+            return {"error": f"Invalid source folder: {src}"}
+
+        root = Path(src)
+        # Enumerate matches recursively using rglob
+        try:
+            candidates = [p for p in root.rglob(pattern) if p.is_file()]
+        except Exception as e:
+            return {"error": f"Invalid pattern '{pattern}': {e}"}
+
+        total = len(candidates)
+        ok = 0
+        skipped = 0
+        failed = 0
+        results: list[dict[str, Any]] = []
+
+        progress and progress(
+            f"Summarize folder: src={src} pattern='{pattern}' overwrite={overwrite} total={total}"
+        )
+
+        for p in candidates:
+            if _is_cancelled(should_cancel):
+                break
+            try:
+                rel = str(p.relative_to(root))
+            except Exception:
+                rel = str(p)
+
+            # Derive sidecar paths next to the input file
+            out_summary = p.with_suffix(".summary.txt")
+            out_keywords = p.with_suffix(".keywords.json")
+
+            # Skip existing when overwrite is False and both sidecars exist
+            if (not overwrite) and out_summary.exists() and out_keywords.exists():
+                results.append({"path": str(p), "rel": rel, "status": "skipped"})
+                skipped += 1
+                continue
+
+            # Read anonymized Markdown
+            try:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+            except Exception as e:
+                results.append(
+                    {
+                        "path": str(p),
+                        "rel": rel,
+                        "status": "failed",
+                        "error": f"read_error: {e}",
+                    }
+                )
+                failed += 1
+                continue
+
+            progress and progress(f"Summarizing: {rel}")
+
+            # Call LLM
+            try:
+                out = summarize_keywords(
+                    text, model=model or "gpt-4o-mini", timeout_s=timeout_s or 60, seed=0
+                )
+                summary = str(out.get("summary", "")).strip()
+                keywords = out.get("keywords", []) or []
+            except Exception as e:
+                results.append(
+                    {
+                        "path": str(p),
+                        "rel": rel,
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                )
+                failed += 1
+                continue
+
+            # Write sidecars
+            try:
+                out_summary.write_text(
+                    summary + ("\n" if summary and not summary.endswith("\n") else ""),
+                    encoding="utf-8",
+                )
+                with open(out_keywords, "w", encoding="utf-8") as f:
+                    json.dump(keywords, f, ensure_ascii=False, indent=2)
+                results.append({"path": str(p), "rel": rel, "status": "ok"})
+                ok += 1
+            except Exception as e:
+                results.append(
+                    {
+                        "path": str(p),
+                        "rel": rel,
+                        "status": "failed",
+                        "error": f"write_error: {e}",
+                    }
+                )
+                failed += 1
+                continue
+
+        cancelled = _is_cancelled(should_cancel)
+        if cancelled:
+            progress and progress(
+                "Summarize folder: cancellation requested; returning partial results."
+            )
+        ended_at = _dt.now().astimezone().isoformat()
+        # If cancelled mid-loop, adjust total to reflect enumerated candidates; we keep 'total' as all matched
+        return {
+            "total": total,
+            "ok": ok,
+            "skipped": skipped,
+            "failed": failed,
+            "files": results,
+            "ended_at": ended_at,
+            "cancelled": cancelled,
+        }
+
+    def test_model(self, model: str, timeout_s: int | None = 30) -> dict[str, Any]:
+        """Run a tiny probe against the given model to verify it can be called.
+
+        Returns a dict with keys: status ('ok'|'failed'), model, summary (if ok), keywords (if ok), error (if failed)
+        """
+        if not model or not str(model).strip():
+            return {"status": "failed", "error": "model name is required"}
+        try:
+            # Use a very short deterministic prompt that should work for JSON response
+            probe = (
+                'Please return JSON: {"summary":"one sentence", "keywords":["a","b","c","d","e"]}'
+            )
+            # Use existing LLM helper; it will omit sampling params for GPT-5 automatically
+            from shared.llm.openai_client import (
+                summarize_keywords,
+            )  # local import to avoid circulars
+
+            out = summarize_keywords(probe, model=model, timeout_s=timeout_s or 30, seed=0)
+            # Basic validation
+            summary = str(out.get("summary", "")).strip()
+            keywords = out.get("keywords", []) or []
+            return {"status": "ok", "model": model, "summary": summary, "keywords": keywords}
+        except Exception as e:
+            return {"status": "failed", "model": model, "error": str(e)}

@@ -18,6 +18,8 @@ Install (GUI-only)
       - pip install presidio-analyzer spacy
       - And install at least one spaCy model:
         - python3 -m spacy download en_core_web_sm
+  - For LLM summaries (Step 3), install:
+    - pip install openai>=1.42.0 python-dotenv>=1.0.1
 
 Run (development)
 - The GUI package lives under src/gui. Ensure that the repository's src/ directory
@@ -29,8 +31,7 @@ Run (development)
 Quick notes
 - The GUI requires PySide6; when not installed the app prints an explanatory message
   and exits with a non-zero code.
-- If you prefer a native wrapper or entry-point, consider adding a console script
-  in pyproject.toml or a small shell wrapper that sets PYTHONPATH for you.
+- LLM summarization requires OPENAI_API_KEY set in a .env at the repo root (never logged). Only anonymized text is sent to the API.
 
 New UI features
 - Standalone translation controls (Preprocess tab):
@@ -49,8 +50,15 @@ New UI features
   - Comprehensive routing telemetry in translation reports.
   - Helpful (?) tooltip buttons explaining each parameter's purpose.
 - Background worker + Cancel buttons (all long-running tabs):
-  - Convert, Language Detection, Anonymization, and Anon Batch run in a background thread.
+  - Convert, Language Detection, Anonymization, Anon Batch, and LLM Summary run in a background thread.
   - Live logs stream to the output pane; Cancel requests a cooperative stop.
+- LLM Summary tab (new):
+  - Run Step 3 summarization/keywords by document UID (requires Step 1 artifacts in outputs/artifacts/{uid}/step1).
+  - Model selection via editable dropdown (defaults to gpt-5-mini; includes common OpenAI models; custom names allowed).
+  - Folder mode: run summarization over a folder of anonymized Markdown files (*.anonymized.md by default). For each input file, writes sidecars next to it:
+    - <name>.summary.txt
+    - <name>.keywords.json
+  - Deterministic settings (temperature=0, top_p=1, seed=0). Never logs document content or secrets.
 
 Advanced routing features
 - Preprocess tab: Full integration with translation workflow
@@ -70,12 +78,17 @@ Usage tips
 - Translate flow: set Source/Output, choose translation options, click Translate.
   - Translate-only translates .md files under Source; otherwise it uses results from the last convert run.
   - The report path is shown after a run; open it to inspect per-file outcomes.
+- LLM Summary flow:
+  - UID mode: paste a document_uid (from Step 1) and click "Run LLM Summary (UID)". On success, "summary.txt" and "keywords.json" appear under outputs/artifacts/{uid}/step3/.
+  - Folder mode: select a folder with anonymized .md files and click "Run LLM Summary (Folder)". Sidecars are written next to each matched file: <name>.summary.txt and <name>.keywords.json.
+  - The model dropdown is editable; you can type a custom model name if needed. Timeout is configurable (default 60s).
 
 Tabs
 - Preprocess: plan and run convert-only Markdown pipeline (folder -> .md) and translation.
 - Language Detection: detect the primary language of a document (with candidates/window tuning).
 - Anonymization: detect, pseudonymize (with context), and de-anonymize sample text.
 - Anon Batch: folder anonymization (deterministic or pseudonymize) with cooperative cancellation.
+- LLM Summary: run Step 3 for a document UID or summarize a folder of anonymized Markdown.
 - Jobs: placeholder for history and logs.
 - Settings: environment/session settings and preflight.
 
@@ -106,6 +119,8 @@ Service facade
   - anon_detect(text, language)
   - anon_pseudonymize(text, context_id, language)
   - anon_deanonymize(text, context_id)
+  - step3_run(document_uid, content_hash?, model?, timeout_s?) -> Step 3 result
+  - summarize_folder_run(cfg={src, pattern, overwrite, model?, timeout_s?}) -> batch result
 
 Design choices
 - Qt shim: gui.views.qt provides a compatibility layer that imports PySide6 at runtime

@@ -46,6 +46,10 @@ huggingface-hub>=0.21.0
 # Packaging (optional for desktop build)
 pyinstaller>=6,<7
 
+# LLM summarization
+openai>=1.42.0
+python-dotenv>=1.0.1
+
 # --- Notes ---
 # If you only need a subset (e.g. no translation), you can comment out the large DL packages (torch, transformers,
 # ctranslate2, sentencepiece, sacremoses, huggingface-hub) to speed installation.

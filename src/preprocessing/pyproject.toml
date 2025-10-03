@@ -37,7 +37,7 @@ classifiers = [
   "Topic :: Text Processing :: Markup",
 ]
 # Core package remains import-light; engines and parsers are optional extras.
-dependencies = []
+dependencies = ["openai>=1.42.0"]
 
 [project.optional-dependencies]
 # Document parsers used by the convert phase

@@ -12,6 +12,9 @@ behavior correct when PySide6 is available.
 
 try:  # pragma: no cover - import-time capability check
     from PySide6.QtCore import Qt as _Qt  # type: ignore
+    from PySide6.QtCore import QObject as _QObject  # type: ignore
+    from PySide6.QtCore import Signal as _Signal  # type: ignore
+    from PySide6.QtCore import QThread as _QThread  # type: ignore
     from PySide6.QtWidgets import (  # type: ignore
         QApplication as _QApplication,
         QMainWindow as _QMainWindow,
@@ -51,6 +54,9 @@ try:  # pragma: no cover - import-time capability check
     QComboBox = _QComboBox
     QLabel = _QLabel
     QStyle = _QStyle
+    QObject = _QObject
+    Signal = _Signal
+    QThread = _QThread
 
 except Exception:  # pragma: no cover - stub fallback
     QT_AVAILABLE = False
@@ -58,9 +64,24 @@ except Exception:  # pragma: no cover - stub fallback
     class _QtStub:
         ElideRight = 0
 
-    class _Signal:  # minimal signal stub
-        def connect(self, *args, **kwargs):
-            pass
+    class _Signal:
+        """Minimal signal stub with connect/emit no-ops.
+
+        In non-GUI environments, handlers are stored and called synchronously on emit.
+        """
+
+        def __init__(self, *args, **kwargs) -> None:
+            self._subs: list = []
+
+        def connect(self, fn, *args, **kwargs):
+            self._subs.append(fn)
+
+        def emit(self, *args, **kwargs):
+            for fn in list(self._subs):
+                try:
+                    fn(*args, **kwargs)
+                except Exception:
+                    pass
 
     class _Widget:
         def __init__(self, *args, **kwargs):
@@ -73,6 +94,9 @@ except Exception:  # pragma: no cover - stub fallback
             pass
 
         def setStyleSheet(self, *args, **kwargs):
+            pass
+
+        def setObjectName(self, *args, **kwargs):
             pass
 
     class _Layout:
@@ -164,9 +188,15 @@ except Exception:  # pragma: no cover - stub fallback
         def setPlaceholderText(self, *args, **kwargs):
             pass
 
+        def setReadOnly(self, *args, **kwargs):
+            pass
+
     class QPushButton(_Widget):
         def __init__(self, *args, **kwargs):
             self.clicked = _Signal()
+
+        def setToolTip(self, *args, **kwargs):
+            pass
 
     class QToolButton(_Widget):
         def __init__(self, *args, **kwargs):
@@ -229,6 +259,12 @@ except Exception:  # pragma: no cover - stub fallback
         def value(self) -> int:
             return 1
 
+        def setToolTip(self, *args, **kwargs):
+            pass
+
+        def setEnabled(self, *args, **kwargs):
+            pass
+
     class QComboBox(_Widget):
         def addItems(self, *args, **kwargs):
             pass
@@ -240,6 +276,24 @@ except Exception:  # pragma: no cover - stub fallback
             return ""
 
         def setCurrentText(self, *args, **kwargs):
+            pass
+
+        def count(self) -> int:
+            return 0
+
+        def itemText(self, i: int) -> str:  # noqa: ARG002
+            return ""
+
+        def minimumWidth(self) -> int:
+            return 0
+
+        def setMinimumWidth(self, *args, **kwargs):
+            pass
+
+        def view(self):
+            return self
+
+        def setSizeAdjustPolicy(self, *args, **kwargs):
             pass
 
     class QLabel(_Widget):
@@ -255,3 +309,40 @@ except Exception:  # pragma: no cover - stub fallback
     class QStyle:
         # Minimal stub to satisfy imports
         pass
+
+    class QObject:  # minimal stub
+        def moveToThread(self, *args, **kwargs):
+            pass
+
+    class QThread:  # minimal stub
+        def __init__(self, *args, **kwargs):
+            # Provide a started Signal so callers can connect slots
+            self.started = _Signal()
+            self._t = None
+
+        def start(self):
+            # Launch a real Python thread that emits started; slots will run in that thread
+            import threading
+
+            def _runner():
+                try:
+                    self.started.emit()
+                except Exception:
+                    pass
+
+            self._t = threading.Thread(target=_runner, name="QtStubThread", daemon=True)
+            self._t.start()
+
+        def quit(self):
+            # No-op; cooperative cancellation should be handled by worker
+            pass
+
+        def wait(self):
+            try:
+                if self._t and self._t.is_alive():
+                    self._t.join(timeout=5.0)
+            except Exception:
+                pass
+
+    # Expose Signal class for type compat
+    Signal = _Signal

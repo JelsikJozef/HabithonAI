@@ -338,6 +338,13 @@ class MarkdownWriter(MarkdownSerializerPort):
         out_dir = out_root / rel.parent
         out_dir = _ensure_within_root(out_root, out_dir)
         stem = _sanitize_filename(rel.stem)
+
+        # If this document represents an English variant, add a stable suffix
+        variant = getattr(doc, "variant", None)
+        is_english_variant = isinstance(variant, str) and variant.lower() == "english"
+        if is_english_variant and not stem.lower().endswith("_en"):
+            stem = f"{stem}_en"
+
         out_md = (out_dir / f"{stem}.md").resolve()
         out_md = _ensure_within_root(out_root, out_md)
 

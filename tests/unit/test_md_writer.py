@@ -160,3 +160,28 @@ def test_overwrite_policy_and_trim_extra_newlines(tmp_path: Path):
     ctx2 = make_ctx(out, src, overwrite=False)
     res2 = w.write(doc, ctx2)
     assert res2.status == "skip_existing"
+
+
+def test_compute_paths_english_suffix(tmp_path: Path):
+    src = tmp_path / "src"
+    out = tmp_path / "out"
+    src.mkdir()
+    out.mkdir()
+    p = src / "report.md"
+    p.write_text("hello", encoding="utf-8")
+
+    class EDoc:
+        def __init__(self, path: str, text: str):
+            self.path = path
+            self.text_md = text
+            self.variant = "english"
+            self.lang = "en"
+            self.meta = {}
+
+    doc = EDoc(str(p), "Hello world")
+    w = MarkdownWriter()
+    ctx = make_ctx(out, src)
+    targets = w.compute_paths(doc, ctx)
+
+    assert targets.out_md_path.endswith("report_en.md")
+    assert Path(targets.assets_dir).name.endswith("report_en")

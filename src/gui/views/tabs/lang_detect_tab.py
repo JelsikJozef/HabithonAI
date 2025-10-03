@@ -24,6 +24,7 @@ from ..ui_helpers import (
 )  # updated imports
 
 from ...services.facade import GuiServices
+from ...services.async_worker import start_worker  # NEW
 
 
 class LanguageDetectTab(QWidget):
@@ -32,6 +33,8 @@ class LanguageDetectTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.svc = GuiServices()
+        self._jobs: list[tuple] = []  # keep thread/worker refs
+        self._current: tuple | None = None  # (thread, worker)
 
         vbox = QVBoxLayout(self)
 
@@ -199,6 +202,10 @@ class LanguageDetectTab(QWidget):
                 self.detect_btn, "Run selected detection mode and display structured results."
             )
         )
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setToolTip("Request cancellation of the current analysis.")
+        self.cancel_btn.setEnabled(False)
+        actions.addWidget(self.cancel_btn)
         actions.addStretch(1)
         vbox.addLayout(actions)
 
@@ -213,13 +220,74 @@ class LanguageDetectTab(QWidget):
         # Signals
         pick_btn.clicked.connect(self._browse_file)
         self.detect_btn.clicked.connect(self._on_detect)
+        self.cancel_btn.clicked.connect(self._on_cancel)
         self.detection_mode.currentTextChanged.connect(self._update_enabled_states)
         self.enable_translation_test.toggled.connect(self._update_enabled_states)
 
         # Initialize enabled/disabled state
         self._update_enabled_states()
 
+    def cancel_all_jobs(self) -> None:
+        """Cancel and wait for all active background jobs (app shutdown safety)."""
+        try:
+            if self._current and len(self._current) == 2:
+                _t, w = self._current
+                try:
+                    w.cancel()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        for t, w in list(self._jobs):
+            try:
+                w.cancel()
+            except Exception:
+                pass
+        for t, w in list(self._jobs):
+            try:
+                t.quit()
+                t.wait()
+            except Exception:
+                pass
+        try:
+            self.cancel_btn.setEnabled(False)
+        except Exception:
+            pass
+
     # --- State management -------------------------------------------------
+    def _set_busy(self, busy: bool) -> None:
+        for w in [
+            self.file_edit,
+            self.candidates_edit,
+            self.max_chars_sp,
+            self.min_chars_sp,
+            self.detection_mode,
+            self.topk_k,
+            self.tau_low,
+            self.delta_close,
+            self.enable_translation_test,
+            self.tau_en,
+            self.similarity_threshold,
+            self.probe_slice,
+            self.detect_btn,
+        ]:
+            try:
+                w.setEnabled(not busy)
+            except Exception:
+                pass
+        try:
+            self.cancel_btn.setEnabled(busy)
+        except Exception:
+            pass
+
+    def _append_log(self, line: str) -> None:
+        try:
+            prev = self.output.toPlainText()
+            nl = "\n" if prev else ""
+            self.output.setPlainText(prev + nl + str(line))
+        except Exception:
+            pass
+
     def _update_enabled_states(self) -> None:
         mode = self.detection_mode.currentText()
         topk_enabled = mode in ["Top-K Analysis", "Advanced Routing"]
@@ -246,6 +314,16 @@ class LanguageDetectTab(QWidget):
             self.file_edit.setText(path)
 
     # --- Detection actions ------------------------------------------------
+    def _on_cancel(self) -> None:
+        if self._current and len(self._current) == 2:
+            _t, w = self._current
+            try:
+                w.cancel()
+                self._append_log("User cancelled. Waiting for safe stop…")
+            except Exception:
+                pass
+        self.cancel_btn.setEnabled(False)
+
     def _on_detect(self) -> None:
         path = self.file_edit.text().strip()
         if not path:
@@ -258,26 +336,32 @@ class LanguageDetectTab(QWidget):
         max_chars = int(self.max_chars_sp.value())
         min_chars = int(self.min_chars_sp.value())
         mode = self.detection_mode.currentText()
-        try:
+
+        self.output.setPlainText("")
+        self._set_busy(True)
+
+        def job(progress=None, should_cancel=None):
             if mode == "Basic Detection":
-                res: dict[str, Any] = self.svc.lang_detect_file(
+                return self.svc.lang_detect_file(
                     path,
                     candidates=candidates,
                     max_chars=max_chars,
                     min_chars=min_chars,
+                    progress=progress,
+                    should_cancel=should_cancel,
                 )
-                self._display_basic_result(res)
             elif mode == "Top-K Analysis":
-                res = self.svc.lang_detect_topk(
+                return self.svc.lang_detect_topk(
                     path,
                     k=int(self.topk_k.value()),
                     candidates=candidates,
                     max_chars=max_chars,
                     min_chars=min_chars,
+                    progress=progress,
+                    should_cancel=should_cancel,
                 )
-                self._display_topk_result(res)
             else:
-                res = self.svc.lang_detect_advanced_routing(
+                return self.svc.lang_detect_advanced_routing(
                     path,
                     k=int(self.topk_k.value()),
                     candidates=candidates,
@@ -290,10 +374,38 @@ class LanguageDetectTab(QWidget):
                         "similarity_noop_threshold": self.similarity_threshold.value() / 100.0,
                     },
                     enable_translation_test=self.enable_translation_test.isChecked(),
+                    progress=progress,
+                    should_cancel=should_cancel,
                 )
-                self._display_advanced_result(res)
-        except Exception as e:  # pragma: no cover - runtime safety
-            self.output.setPlainText(f"Detection failed: {e}")
+
+        def on_result(res: dict[str, Any]):
+            try:
+                if res.get("cancelled"):
+                    prev = self.output.toPlainText()
+                    self.output.setPlainText(prev + ("\n" if prev else "") + "Cancelled.")
+                    return
+                if mode == "Basic Detection":
+                    self._display_basic_result(res)
+                elif mode == "Top-K Analysis":
+                    self._display_topk_result(res)
+                else:
+                    self._display_advanced_result(res)
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        def on_error(err: str):
+            try:
+                self.output.setPlainText(f"Detection failed: {err}")
+            finally:
+                self._set_busy(False)
+                self.cancel_btn.setEnabled(False)
+                self._current = None
+
+        t, w = start_worker(job, on_log=self._append_log, on_result=on_result, on_error=on_error)
+        self._jobs.append((t, w))
+        self._current = (t, w)
 
     # --- Result formatting ------------------------------------------------
     def _display_basic_result(self, res: dict[str, Any]) -> None:

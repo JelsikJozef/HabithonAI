@@ -233,3 +233,40 @@ class AnonymizationBridge:
             except Exception:
                 return False
         return False
+
+
+# -----------------------------
+# Step 2 Orchestrator helper
+# -----------------------------
+
+from .segmenter import run_step2, Step2Inputs, Step2Config  # noqa: E402
+
+
+def run_segmentation(
+    *,
+    document_uid: str,
+    content_hash: str | None = None,
+    run_id: str | None = None,
+    config_overrides: dict | None = None,
+) -> dict[str, Any]:
+    """Run Step 2 segmentation for a previously normalized document.
+
+    Reads Step 1 artifacts from outputs/artifacts/{document_uid}/step1/ and writes Step 2 artifacts under step2/.
+    Returns the Step 2 result object.
+    """
+    cfg = Step2Config()
+    if isinstance(config_overrides, dict):
+        # Only update known fields; ignore unknowns for forward compatibility
+        for k in ("target_chunk_chars", "hard_max_chunk_chars", "min_chunk_chars", "overlap_chars"):
+            if k in config_overrides and isinstance(getattr(cfg, k, None), int):
+                try:
+                    setattr(cfg, k, int(config_overrides[k]))
+                except Exception:
+                    pass
+    inputs = Step2Inputs(
+        document_uid=document_uid,
+        content_hash=content_hash,
+        context={"run_id": run_id} if run_id else {},
+        config=cfg,
+    )
+    return run_step2(inputs)

@@ -1,6 +1,6 @@
 # Consolidated dependencies for the full HabithonAI toolchain (GUI + preprocessing + anonymization + APIs)
 # Install with: pip install -r requirements-all.txt
-# After install, run the spaCy model downloads listed at the bottom (or use scripts/setup_all.sh).
+# spaCy language models are installed via pip below; no separate download step needed.
 
 # --- GUI & core ---
 PySide6>=6.5,<7
@@ -17,7 +17,15 @@ extract_msg>=0.48.5
 
 # Anonymization (Presidio + spaCy)
 presidio-analyzer>=2.2
-spacy>=3.5
+spacy>=3.7,<4
+# spaCy language models (install via direct wheels)
+# Note: keep these versions compatible with the installed spaCy version.
+# English
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+# German (3.7.0 is the latest available for de_core_news_sm)
+de-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.7.0/de_core_news_sm-3.7.0-py3-none-any.whl
+# Multi-language NER (fallback)
+xx-ent-wiki-sm @ https://github.com/explosion/spacy-models/releases/download/xx_ent_wiki_sm-3.7.0/xx_ent_wiki_sm-3.7.0-py3-none-any.whl
 
 # Optional Postgres token vault
 psycopg>=3.1
@@ -38,11 +46,10 @@ huggingface-hub>=0.21.0
 # Packaging (optional for desktop build)
 pyinstaller>=6,<7
 
-# --- Post-install (not pip-installable as regular packages) ---
-# Run these to download spaCy language models used by Presidio & fallback:
-#   python3 -m spacy download en_core_web_sm
-#   python3 -m spacy download de_core_news_sm
-#   python3 -m spacy download xx_ent_wiki_sm
+# LLM summarization
+openai>=1.42.0
+python-dotenv>=1.0.1
 
+# --- Notes ---
 # If you only need a subset (e.g. no translation), you can comment out the large DL packages (torch, transformers,
 # ctranslate2, sentencepiece, sacremoses, huggingface-hub) to speed installation.

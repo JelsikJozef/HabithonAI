@@ -1189,7 +1189,9 @@ def _run_translation_phase(
                 hf_cache_dir=mar.get("hf_cache_dir"),
                 glossary=glossary,
                 cache=cache,
+                segment_langid=_ft,  # per-segment LangID
             )
+            translator_secondary = None
         elif engine == "ct2_nllb":
             from ..adapters.translate.ct2_nllb import NllbCTranslate2  # type: ignore
 
@@ -1219,9 +1221,61 @@ def _run_translation_phase(
             except Exception as e:
                 logging.error("CT2/NLLB load failed: %s", e)
                 return 3, {"error": f"CT2/NLLB load failed: {e}"}
+            # Prepare a Marian secondary for mixed-language fallback
+            translator_secondary = None
+            try:
+                from ..adapters.translate.marian_opus import MarianOpus as _Marian  # type: ignore
+
+                mar = dict(settings.get("marian", {}))
+                dec_m = dict(dec.get("marian", {}))
+                translator_secondary = _Marian(
+                    models=dict(mar.get("models", {})),
+                    device=str(mar.get("device", "cpu")),
+                    dtype=str(mar.get("dtype", "auto")),
+                    num_beams=int(dec_m.get("num_beams", 4) or 4),
+                    length_penalty=float(dec_m.get("length_penalty", 1.0) or 1.0),
+                    max_batch_size=int(dec_m.get("max_batch_size", 16) or 16),
+                    max_new_tokens=int(dec_m.get("max_new_tokens", 256) or 256),
+                    no_repeat_ngram_size=dec_m.get("no_repeat_ngram_size"),
+                    segmenter_options=seg_opts,
+                    glossary_mode=str(gl_cfg.get("mode", "none")),
+                    cache_enabled=bool(cache_cfg.get("enabled", False)),
+                    seed=dec_m.get("seed"),
+                    local_files_only=bool(mar.get("local_files_only", True)),
+                    hf_cache_dir=mar.get("hf_cache_dir"),
+                    glossary=glossary,
+                    cache=cache,
+                    segment_langid=_ft,
+                )
+            except Exception as e:
+                logging.warning("Secondary Marian translator unavailable: %s", e)
         else:
             logging.error("Unknown translator engine: %s", engine)
             return 2, {"error": f"Unknown translator engine: {engine}"}
+
+        # Provide advanced validators (English detector + similarity) for routing when available
+        english_detector = None
+        similarity = None
+        try:
+            from ..adapters.langid.english_detector_fasttext import (  # type: ignore
+                FastTextEnglishDetector,
+            )
+
+            english_detector = FastTextEnglishDetector(
+                str(langid_cfg.get("model_path")),
+                max_chars=int(langid_cfg.get("max_chars", 3000) or 3000),
+                min_chars=int(langid_cfg.get("min_chars", 32) or 32),
+            )
+        except Exception as e:
+            logging.debug("EnglishDetector unavailable: %s", e)
+        try:
+            from ..adapters.similarity.simple_similarity import (  # type: ignore
+                TrigramJaccardSimilarity,
+            )
+
+            similarity = TrigramJaccardSimilarity()
+        except Exception as e:
+            logging.debug("Similarity adapter unavailable: %s", e)
 
     except Exception as e:
         logging.error("Translation components unavailable: %s", e)
@@ -1368,8 +1422,19 @@ def _run_translation_phase(
             self.glossary = glossary
             self.cache = cache
             self.writer_ctx = writer_ctx
+            # Advanced routing helpers (optional)
+            self.english_detector = english_detector
+            self.similarity = similarity
+            self.translate_secondary = None
 
     ports = _Ports()
+    try:
+        # Attach secondary translator if prepared (e.g., Marian when CT2 is primary)
+        # translator_secondary may be undefined when engine is Marian; guard with locals().
+        if "translator_secondary" in locals() and locals()["translator_secondary"] is not None:
+            ports.translate_secondary = locals()["translator_secondary"]
+    except Exception:
+        pass
 
     # Build cfg for batch ensure
     en_cfg: dict[str, Any] = {

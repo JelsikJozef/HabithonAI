@@ -11,13 +11,9 @@ fasttext>=0.9.2; platform_system != "Darwin"
 # Anonymization (Presidio + spaCy)
 presidio-analyzer>=2.2
 spacy>=3.7,<4
-# spaCy language models (install via direct wheels)
-# English
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
-# German (3.7.0 is the latest available)
-https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.7.0/de_core_news_sm-3.7.0-py3-none-any.whl
-# Multi-language NER (fallback)
-https://github.com/explosion/spacy-models/releases/download/xx_ent_wiki_sm-3.7.0/xx_ent_wiki_sm-3.7.0-py3-none-any.whl
+# NOTE: spaCy language models are installed via scripts/setup_gui.sh using `python -m spacy download`.
+# This avoids flaky direct GitHub wheel downloads during `pip install -r requirements-gui.txt`.
+# Models ensured by setup script: en_core_web_sm, de_core_news_sm, xx_ent_wiki_sm
 
 # Optional: building a standalone app bundle
 pyinstaller>=6,<7
@@ -26,3 +22,7 @@ pyinstaller>=6,<7
 python-docx>=0.8.11
 pdfminer.six>=20221105
 extract_msg>=0.48.5
+
+# LLM summarization
+openai>=2.38.0,<3.0
+python-dotenv>=1.0.1

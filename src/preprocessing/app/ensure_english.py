@@ -332,11 +332,8 @@ def ensure_english_variant(
             }
 
     # Skip path for English
-    if (
-        (src_lang == "en")
-        or (src_lang is not None and src_lang.lower() == "en")
-        or (src_lang is None and detected_conf is not None and detected_conf >= en_threshold)
-        or (src_lang == "en" and (detected_conf is None or detected_conf >= en_threshold))
+    if (src_lang and src_lang.lower() == "en") or (
+        src_lang is None and detected_conf is not None and detected_conf >= en_threshold
     ):
         # Plan-only is still useful to return the path. Optionally write/copy if not present.
         if dry_run:
@@ -492,6 +489,11 @@ def ensure_english_variant(
         ]
         if cand_codes:
             selected_src = _probe_choose(cand_codes)
+
+    # NEW: Hint translator to handle mixed-language documents per segment when detection is ambiguous
+    # This flag is recognized by the Marian adapter (no-op for others).
+    if need_probe:
+        options["mixed_lang_per_segment"] = True
 
     # Deterministic retry ladder with validation
     tried: list[tuple[str, str]] = []  # (engine_name, src_code)

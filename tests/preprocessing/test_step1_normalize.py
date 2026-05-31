@@ -112,6 +112,35 @@ def test_step1_failure_on_non_en_language_does_not_emit_normalized(
     assert any(e.get("code") == "invalid_language" for e in errors)
 
 
+def test_step1_passes_with_pseudonym_token_containing_digit_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A normalized doc containing a pseudonym token whose body has 10 consecutive
+    digits must not trip the anonymization-sanity guardrail (it is a replacement,
+    not a phone number). Step1 must succeed and emit normalized.txt."""
+    input_text = "Customer h:kid0:a1234567890bcdef0011223344556677 paid the invoice."
+    meta = {
+        "doc_type": "note",
+        "category": "general",
+        "language": "en",
+        "anonymizer_versions": {"rule": "1.0.0"},
+    }
+    context = {"run_id": "runTok"}
+
+    from src.preprocessing.app import normalize as step1_mod
+
+    monkeypatch.setattr(step1_mod, "ARTIFACTS_ROOT", tmp_path / "artifacts")
+    monkeypatch.setattr(step1_mod, "LOGS_ROOT", tmp_path / "logs")
+
+    result = run_step1(Step1Inputs(text=input_text, meta=meta, context=context))
+
+    assert result["status"] == "ok"
+    assert result["checks"]["anonymization_sanity"]["passed"] is True
+    assert result["checks"]["anonymization_sanity"]["patterns"]["phone"] is False
+    art_dir = tmp_path / "artifacts" / result["document_uid"] / "step1"
+    assert (art_dir / "normalized.txt").exists()
+
+
 def test_variant_disambiguates_doc_uid_for_already_english_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

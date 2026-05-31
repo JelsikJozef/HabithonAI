@@ -8,8 +8,9 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
+from src.preprocessing.app.guardrails import anonymization_sanity
 from src.shared.llm.openai_client import summarize_keywords, OpenAIClientError
 
 # Stable policy descriptor for audit/versioning
@@ -98,27 +99,6 @@ def _compute_content_hash(normalized_text: str, canonical_meta: Dict[str, Any]) 
     h.update(b"\n")
     h.update(meta_json.encode("utf-8"))
     return h.hexdigest()
-
-
-# -----------------------------
-# Guardrails
-# -----------------------------
-
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_PHONE_RE = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
-_SSN_US_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
-
-
-def _anonymization_sanity(text: str) -> tuple[bool, dict[str, Any]]:
-    matches = {
-        "email": bool(_EMAIL_RE.search(text)),
-        "phone": bool(_PHONE_RE.search(text)),
-        "ssn_us": bool(_SSN_US_RE.search(text)),
-    }
-    placeholders_present = bool(re.search(r"\[(?:PERSON|EMAIL|PHONE|ADDRESS|ORG)]", text))
-    passed = not any(matches.values())
-    info = {"patterns": matches, "placeholders_present": placeholders_present}
-    return passed, info
 
 
 # -----------------------------
@@ -246,7 +226,7 @@ def run_step3(inputs: Step3Inputs) -> Dict[str, Any]:
         "keywords_shape": False,
         "anonymization_sanity": False,
     }
-    anon_ok, anon_info = _anonymization_sanity(normalized_text)
+    anon_ok, anon_info = anonymization_sanity(normalized_text)
     checks["anonymization_sanity"] = anon_ok
     if not anon_ok:
         result = {

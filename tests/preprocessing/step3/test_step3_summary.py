@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import pytest
 
@@ -191,6 +191,41 @@ def test_step3_too_large_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     assert out["status"] == "failed"
     assert any(e.get("code") == "too_large" for e in out.get("errors", []))
+
+
+def test_step3_passes_with_pseudonym_token_containing_digit_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """End-to-end: a Step1 output whose text contains a pseudonym token with a 10-digit
+    run must NOT be rejected by Step3's anonymization-sanity guardrail. The token is a
+    replacement, not a phone number; Step3 should proceed to summarization."""
+    token_text = "Customer h:kid0:a1234567890bcdef0011223344556677 paid the invoice on time. " * 2
+    s1 = _mk_step1(tmp_path, text=token_text)
+    uid = s1["document_uid"]
+    ch = s1["content_hash"]
+
+    from src.preprocessing.analysis import step3_summary as step3_mod
+
+    step3_mod.ARTIFACTS_ROOT = tmp_path / "artifacts"
+    step3_mod.LOGS_ROOT = tmp_path / "logs"
+
+    def fake_summarize(
+        text: str, model: str = "gpt-5-mini", timeout_s: int = 60, seed: int | None = 0
+    ) -> Dict[str, Any]:
+        return {
+            "summary": "The customer settled the invoice on time.",
+            "keywords": ["customer", "invoice", "payment", "billing", "settlement"],
+            "usage": {},
+        }
+
+    monkeypatch.setattr(step3_mod, "summarize_keywords", fake_summarize)
+
+    out = step3_mod.run_step3(
+        step3_mod.Step3Inputs(document_uid=uid, content_hash=ch, context={"run_id": "rTok"})
+    )
+
+    assert out["status"] == "ok"
+    assert not any(e.get("code") == "anonymization_failed" for e in out.get("errors", []))
 
 
 def test_step3_anonymization_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

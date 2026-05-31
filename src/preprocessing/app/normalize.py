@@ -4,7 +4,6 @@ import base64
 import hashlib
 import json
 import logging
-import re
 import sys
 import time
 from dataclasses import dataclass
@@ -15,6 +14,7 @@ from src.preprocessing.adapters.encoding.utf8_normalizer import (
     NormalizerOptions,
     normalize_text,
 )
+from src.preprocessing.app.guardrails import anonymization_sanity
 
 # Stable policy descriptor for audit/versioning
 NORMALIZATION_POLICY_VERSION = "step1-nfc-lf-v1"
@@ -160,24 +160,6 @@ def _validate_meta(meta: Dict[str, Any]) -> tuple[bool, list[dict[str, str]]]:
     return len(errors) == 0, errors
 
 
-# Reasonably obvious PII patterns
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_PHONE_RE = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
-_SSN_US_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
-
-
-def _anonymization_sanity(text: str) -> tuple[bool, dict[str, Any]]:
-    matches = {
-        "email": bool(_EMAIL_RE.search(text)),
-        "phone": bool(_PHONE_RE.search(text)),
-        "ssn_us": bool(_SSN_US_RE.search(text)),
-    }
-    placeholders_present = bool(re.search(r"\[(?:PERSON|EMAIL|PHONE|ADDRESS|ORG)]", text))
-    passed = not any(matches.values())
-    info = {"patterns": matches, "placeholders_present": placeholders_present}
-    return passed, info
-
-
 def _determinism_check(
     text: str, canonical_meta: Dict[str, Any], content_hash_hex: str, doc_uid: str
 ) -> bool:
@@ -239,7 +221,7 @@ def run_step1(inputs: Step1Inputs) -> Dict[str, Any]:
     logger = _setup_logger(document_uid, run_id or None)
 
     # Anonymization sanity
-    anon_ok, anon_info = _anonymization_sanity(normalized_text)
+    anon_ok, anon_info = anonymization_sanity(normalized_text)
 
     # Determinism check (should always pass)
     deterministic = _determinism_check(normalized_text, canonical_meta, content_hash, document_uid)

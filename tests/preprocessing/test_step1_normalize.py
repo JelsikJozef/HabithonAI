@@ -110,3 +110,72 @@ def test_step1_failure_on_non_en_language_does_not_emit_normalized(
     # Checks contain invalid_language error
     errors = result["checks"]["meta_validation"]["errors"]
     assert any(e.get("code") == "invalid_language" for e in errors)
+
+
+def test_variant_disambiguates_doc_uid_for_already_english_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An already-English doc copied as the English variant has byte-identical text and
+    language='en'. The variant is the sole disambiguator: orig vs en must yield distinct
+    doc_uid / content_hash so their artifacts never overwrite each other."""
+    input_text = "This document is already written in English."
+    meta = {
+        "doc_type": "note",
+        "category": "general",
+        "language": "en",
+        "anonymizer_versions": {"rule": "1.0.0"},
+    }
+    context = {"run_id": "runV"}
+
+    from src.preprocessing.app import normalize as step1_mod
+
+    monkeypatch.setattr(step1_mod, "ARTIFACTS_ROOT", tmp_path / "artifacts")
+    monkeypatch.setattr(step1_mod, "LOGS_ROOT", tmp_path / "logs")
+
+    res_orig = run_step1(Step1Inputs(text=input_text, meta=meta, context=context, variant="orig"))
+    res_en = run_step1(Step1Inputs(text=input_text, meta=meta, context=context, variant="english"))
+
+    assert res_orig["status"] == "ok"
+    assert res_en["status"] == "ok"
+
+    # Distinct identifiers despite identical text + language
+    assert res_orig["document_uid"] != res_en["document_uid"]
+    assert res_orig["content_hash"] != res_en["content_hash"]
+
+    # Variant is the single disambiguator: present only for the non-original variant
+    assert "variant" not in res_orig["canonical_metadata"]
+    assert res_en["canonical_metadata"]["variant"] == "en"
+
+    # Artifacts live under distinct doc_uid directories (no overwrite)
+    orig_dir = tmp_path / "artifacts" / res_orig["document_uid"] / "step1"
+    en_dir = tmp_path / "artifacts" / res_en["document_uid"] / "step1"
+    assert orig_dir.is_dir() and en_dir.is_dir()
+    assert orig_dir != en_dir
+
+
+def test_orig_variant_preserves_doc_uid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Two original-variant runs of identical content keep the same doc_uid; the default
+    variant must not perturb existing identifiers."""
+    input_text = "Stable English content."
+    meta = {
+        "doc_type": "note",
+        "category": "general",
+        "language": "en",
+        "anonymizer_versions": {"rule": "1.0.0"},
+    }
+    context = {"run_id": "runS"}
+
+    from src.preprocessing.app import normalize as step1_mod
+
+    monkeypatch.setattr(step1_mod, "ARTIFACTS_ROOT", tmp_path / "artifacts")
+    monkeypatch.setattr(step1_mod, "LOGS_ROOT", tmp_path / "logs")
+
+    # Default variant ("orig") and explicit "original" must agree, and be stable.
+    res_default = run_step1(Step1Inputs(text=input_text, meta=meta, context=context))
+    res_original = run_step1(
+        Step1Inputs(text=input_text, meta=meta, context=context, variant="original")
+    )
+
+    assert res_default["document_uid"] == res_original["document_uid"]
+    assert res_default["content_hash"] == res_original["content_hash"]
+    assert "variant" not in res_default["canonical_metadata"]

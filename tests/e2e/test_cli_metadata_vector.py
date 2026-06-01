@@ -1,7 +1,6 @@
 # filepath: /Users/jozefjelsik/PycharmProjects/HabithonAI/tests/e2e/test_cli_metadata_vector.py
 from pathlib import Path
 import json
-import os
 import pytest
 
 from src.preprocessing.presentation import cli
@@ -18,8 +17,9 @@ def test_cli_metadata_and_vector_store(tmp_path, monkeypatch):
     md = en_dir / "doc.md"
     md.write_text("Contact alice@example.com or +1 555 123 4567.", encoding="utf-8")
 
-    # Force regex detector to avoid presidio and ensure offline
+    # Force regex detector to avoid presidio and ensure offline; isolate the token vault.
     monkeypatch.setenv("ANON_DETECTORS", "regex")
+    monkeypatch.setenv("ANON_VAULT_DIR", str(tmp_path / "vault"))
 
     argv = [
         "--src",
@@ -41,13 +41,18 @@ def test_cli_metadata_and_vector_store(tmp_path, monkeypatch):
     code = cli.main(argv)
     assert code in (0, 1, 3)
 
-    # Check anonymized file and sidecars
+    # Check anonymized file. The .map.json mapping sidecar is gone: token mappings live
+    # only in the unified domain Token Vault now.
     anon_md = out / "hashed_documents" / "doc_anon.md"
     assert anon_md.exists()
     map_sidecar = Path(str(anon_md) + ".map.json")
-    assert map_sidecar.exists()
+    assert not map_sidecar.exists()
     meta_sidecar = Path(str(anon_md) + ".meta.json")
     assert meta_sidecar.exists()
+
+    # Token mappings were persisted to the unified vault keyed by the variant-scoped id.
+    vault_files = list((tmp_path / "vault").glob("ctx_*_en.json"))
+    assert vault_files, "expected a variant-scoped vault file under ANON_VAULT_DIR"
 
     # Vector store JSONL
     vs_jsonl = out / "vector_store" / "records.jsonl"

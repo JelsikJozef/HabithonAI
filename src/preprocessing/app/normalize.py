@@ -220,6 +220,12 @@ def run_step1(inputs: Step1Inputs) -> Dict[str, Any]:
     run_id = str(inputs.context.get("run_id", "")) if isinstance(inputs.context, dict) else ""
     logger = _setup_logger(document_uid, run_id or None)
 
+    # Token Vault context for this variant (set by the orchestrator). Recorded in the
+    # artifact only -- it never feeds the content hash / doc_uid. It links this artifact
+    # back to the vault entry so deanonymization-by-doc_uid can resolve the mappings.
+    context_id = inputs.context.get("context_id") if isinstance(inputs.context, dict) else None
+    context_id = str(context_id) if context_id is not None else None
+
     # Anonymization sanity
     anon_ok, anon_info = anonymization_sanity(normalized_text)
 
@@ -258,6 +264,7 @@ def run_step1(inputs: Step1Inputs) -> Dict[str, Any]:
     output: Dict[str, Any] = {
         "document_uid": document_uid,
         "content_hash": content_hash,
+        "context_id": context_id,
         "normalized_text": normalized_text,
         "canonical_metadata": canonical_meta,
         "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
@@ -298,6 +305,7 @@ def run_step1(inputs: Step1Inputs) -> Dict[str, Any]:
     summary_lines = [
         f"document_uid: {document_uid}",
         f"content_hash: {content_hash}",
+        f"context_id: {context_id or ''}",
         f"policy: {NORMALIZATION_POLICY_VERSION}",
         f"size_bytes: {size_bytes}",
         f"doc_type: {canonical_meta.get('doc_type')}",

@@ -2,7 +2,7 @@ import os
 
 from ..app.config.pii_settings import PiiSettings
 from ..domain.ports import DetectorPort, TokenVaultPort
-from .token_vault.file_store import FileTokenVault
+from .token_vault.file_store import DEFAULT_VAULT_DIR, FileTokenVault
 from .token_vault.postgres_store import PostgresTokenVault
 from .detectors.regex_detector import RegexDetector
 
@@ -23,7 +23,7 @@ def build_default() -> tuple[list[DetectorPort], TokenVaultPort]:
     """Construct default detectors and token vault based on environment.
 
     Environment variables
-    - ANON_VAULT_DIR: Directory for file-based token vault (default: src/anonymization/.anonymization_vault).
+    - ANON_VAULT_DIR: Directory for file-based token vault (default: outputs/anonymization_vault).
     - ANON_PRESIDIO_LANGS: Comma-separated "lang:model" pairs (e.g., "en:en_core_web_sm,de:de_core_news_sm").
     - ANON_PRESIDIO_FALLBACK_MODEL, ANON_PRESIDIO_DISABLE_FALLBACK, ANON_PRESIDIO_PATTERNS,
       ANON_PERSON_SCORE_SK/DE: Additional settings consumed via PiiSettings.from_env().
@@ -38,7 +38,7 @@ def build_default() -> tuple[list[DetectorPort], TokenVaultPort]:
         vault = PostgresTokenVault(dsn=pg_dsn)
         vault.ensure_schema()
     else:
-        vault_dir = os.getenv("ANON_VAULT_DIR", "src/anonymization/.anonymization_vault")
+        vault_dir = os.getenv("ANON_VAULT_DIR", DEFAULT_VAULT_DIR)
         vault = FileTokenVault(base_dir=vault_dir)
 
     # Central settings

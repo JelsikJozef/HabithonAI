@@ -1,7 +1,5 @@
 import json
-from pathlib import Path
 
-import os
 import pytest
 
 from src.preprocessing.presentation import cli
@@ -21,8 +19,9 @@ def test_cli_anonymize_en_offline(tmp_path, monkeypatch):
 
     report = tmp_path / "report.json"
 
-    # Force regex detector to avoid presidio and ensure offline
+    # Force regex detector to avoid presidio and ensure offline; isolate the token vault.
     monkeypatch.setenv("ANON_DETECTORS", "regex")
+    monkeypatch.setenv("ANON_VAULT_DIR", str(tmp_path / "vault"))
 
     argv = [
         "--src",

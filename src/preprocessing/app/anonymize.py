@@ -19,6 +19,7 @@ def anonymize_translated_document(
     document_id: str,
     en_md_path: str | Path,
     *,
+    context_id: str | None = None,
     tenant_id: str | None = None,
     language: str = "en",
     # Optional dependency injection for testing/extensibility
@@ -30,8 +31,11 @@ def anonymize_translated_document(
     """Anonymize a translated English Markdown file using deterministic hashing.
 
     Inputs:
-    - document_id: stable identifier (e.g., "md::rel/path.md") used as context_id fallback
+    - document_id: human-readable label for the document (e.g., "md::rel/path.md").
     - en_md_path: path to the English Markdown file to anonymize
+    - context_id: variant-scoped Token Vault namespace. When ``None`` it is derived from the
+      English source text via :func:`derive_context_id` (variant ``"en"``), so the same id
+      is reproducible later (e.g. during deanonymization) from the still-present EN file.
 
     Behavior:
     - Loads the Markdown text from disk
@@ -42,8 +46,11 @@ def anonymize_translated_document(
     - Raises exceptions from I/O or anonymization call; caller decides policy
 
     """
+    from src.shared.hashing import derive_context_id
+
     p = Path(en_md_path)
     text = p.read_text(encoding="utf-8")
+    ctx_id = context_id if context_id is not None else derive_context_id(text, "en")
 
     # Lazy import defaults when not injected
     if anonymize_func is None:
@@ -65,8 +72,6 @@ def anonymize_translated_document(
         vault = vault or vlt
         crypto = crypto or _Crypto()
 
-    # Use document_id as context for stable token grouping
-    ctx_id = document_id
     res = anonymize_func(
         text,
         detectors,
@@ -81,16 +86,9 @@ def anonymize_translated_document(
     if isinstance(res, dict):
         anonymized_text = str(res.get("pseudonymized_text", ""))
         mappings = list(res.get("mappings", []) or [])
-        context_id = res.get("context_id")
-        context_id = str(context_id) if context_id is not None else None
     else:
         anonymized_text = str(getattr(res, "pseudonymized_text", ""))
         mappings = list(getattr(res, "mappings", []) or [])
-        context_id = getattr(res, "context_id", None)
-        try:
-            context_id = str(context_id) if context_id is not None else None
-        except Exception:
-            context_id = None
 
     # Coerce mappings to dicts with token/type/value keys when objects
     norm_maps: list[dict[str, Any]] = []
@@ -117,5 +115,5 @@ def anonymize_translated_document(
         src_path=str(p.resolve()),
         anonymized_text=anonymized_text,
         mappings=norm_maps,
-        context_id=context_id,
+        context_id=ctx_id,
     )

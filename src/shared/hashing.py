@@ -32,9 +32,13 @@ __all__ = [
     "content_hash",
     "document_fingerprint",
     "make_document_id",
+    "derive_context_id",
     "chunk_hash",
     "chunk_id",
 ]
+
+# Map MarkdownDoc-style variant labels to the short tags used in identifiers.
+_VARIANT_TAGS = {"original": "orig", "english": "en"}
 
 
 def _to_utf8_bytes(text: str) -> bytes:
@@ -192,6 +196,34 @@ def make_document_id(
         dig = h.hexdigest()
     core = dig[: max(8, int(length))]
     return f"{prefix}_{core}"
+
+
+def derive_context_id(text: str, variant: str = "orig") -> str:
+    """Derive a variant-scoped Token Vault context_id from source content.
+
+    The context_id binds the Token Vault to a *document variant* (CLAUDE.md invariant 4).
+    It is computed from the pre-anonymization source text so it is available at the very
+    first pipeline step (anonymization), unlike the post-anonymization ``document_uid``.
+
+    Format: ``ctx_{sha256(normalize_text(text))[:16]}_{variant_tag}``
+    where ``variant_tag`` is the short form (``orig`` / ``en``). Original and English
+    variants therefore never share a context_id — even when their source text is byte
+    identical (e.g. an already-English document) the variant tag keeps them separate.
+
+    Only ``[a-z0-9_]`` characters are produced, so the id survives the FileTokenVault
+    filename sanitization losslessly.
+
+    Parameters
+    - text: Source markdown of the variant, *before* anonymization.
+    - variant: Variant label; accepts MarkdownDoc forms ("original"/"english") or the
+      short tags ("orig"/"en"). Unknown/empty defaults to "orig".
+
+    Returns
+    - Context id string, e.g. "ctx_1a2b3c4d5e6f7a8b_en".
+    """
+    tag = _VARIANT_TAGS.get(variant, variant or "orig")
+    digest = content_hash(normalize_text(text))[:16]
+    return f"ctx_{digest}_{tag}"
 
 
 def chunk_hash(

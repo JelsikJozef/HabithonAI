@@ -1571,25 +1571,12 @@ def _run_anonymize_phase(
         doc_rel = rel.as_posix() if isinstance(rel, Path) else str(rel)
         document_id = f"md::{doc_rel}"
         try:
-            # Run use-case (pure)
+            # Run use-case (pure). Token mappings are persisted to the single domain Token
+            # Vault (keyed by the variant-scoped context_id); no separate sidecar is written.
             res = _anon_usecase(document_id, p, tenant_id=tenant_id, language="en")
             # Persist anonymized copy
             if not cfg.dry_run:
                 dst = storage.write(p, res.anonymized_text)
-                # Also persist mappings sidecar for offline de-anonymization
-                try:
-                    sidecar = Path(str(dst) + ".map.json")
-                    sidecar.write_text(
-                        json.dumps(
-                            {"context_id": res.context_id or document_id, "mappings": res.mappings},
-                            ensure_ascii=False,
-                            indent=2,
-                        ),
-                        encoding="utf-8",
-                        newline="\n",
-                    )
-                except Exception as e:
-                    logging.warning("Failed to write mapping sidecar for %s: %s", str(dst), e)
             else:
                 dst = storage.compute_target_path(p)
             created += 1
@@ -1729,29 +1716,20 @@ def _run_metadata_and_vector_phase(
                 except Exception as e:
                     logging.warning("Failed to write metadata sidecar for %s: %s", str(a), e)
 
-            # De-anonymize using mapping sidecar
+            # De-anonymize via the single domain Token Vault. The context_id is recomputed
+            # from the still-present EN source file (same derivation as the anonymize phase),
+            # so no per-file mapping sidecar is needed.
             restored_text = text
             try:
-                sidecar = Path(str(a) + ".map.json")
-                if sidecar.exists():
-                    data = json.loads(sidecar.read_text(encoding="utf-8"))
-                    maps = data.get("mappings") or []
-                    # longest-first replacement
-                    pairs: list[tuple[str, str]] = []
-                    for m in maps:
-                        tok = m.get("token")
-                        val = m.get("value")
-                        if tok and val:
-                            pairs.append((str(tok), str(val)))
-                    pairs.sort(key=lambda t: len(t[0]), reverse=True)
-                    out = text
-                    for tok, val in pairs:
-                        out = out.replace(tok, val)
-                    restored_text = out
-                else:
-                    logging.warning(
-                        "Mapping sidecar missing for %s; skipping de-anonymization", a.name
-                    )
+                from src.shared.hashing import derive_context_id
+
+                from ..adapters.deanonymizer.vault_deanonymizer import (  # type: ignore
+                    VaultDeAnonymizer,
+                )
+
+                en_text = en_path.read_text(encoding="utf-8")
+                ctx_id = derive_context_id(en_text, "en")
+                restored_text = VaultDeAnonymizer().restore(text, context_id=ctx_id)
             except Exception as e:
                 logging.warning("De-anonymization failed for %s: %s", a.name, e)
 

@@ -4,7 +4,7 @@ import os
 
 from ...adapters.crypto.crypto import Crypto as _Crypto
 from ...adapters.detectors.adapter import PresidioDetector
-from ...adapters.token_vault.file_store import FileTokenVault
+from ...adapters.token_vault.file_store import DEFAULT_VAULT_DIR, FileTokenVault
 from ...domain.anonymizer import anonymize as _anonymize
 from ...domain.entities import DeAnonymizationResult, DetectionResult, PseudonymizationResult
 from ...domain.ports import DetectorPort, TokenVaultPort
@@ -35,7 +35,7 @@ class PiiService:
         self.settings = settings or PiiSettings.from_env()
         self.detectors = detectors or [PresidioDetector(settings=self.settings)]
         if vault is None:
-            vault_dir = os.getenv("ANON_VAULT_DIR", "src/anonymization/.anonymization_vault")
+            vault_dir = os.getenv("ANON_VAULT_DIR", DEFAULT_VAULT_DIR)
             self.vault = FileTokenVault(base_dir=vault_dir)
         else:
             self.vault = vault

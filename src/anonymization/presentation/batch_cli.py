@@ -2,13 +2,12 @@ import argparse
 import json
 import os
 from datetime import datetime as _dt
-from pathlib import Path
 
 from ..adapters.container import build_default
 from ..adapters.crypto.crypto import Crypto
 from ..app.pseudonymize import pseudonymize
 from ..domain.anonymizer import anonymize as domain_anonymize
-from shared.hashing import document_fingerprint
+from shared.hashing import derive_context_id
 
 
 def _scan_entries(src: str, recurse: bool) -> list[tuple[str, str]]:
@@ -89,9 +88,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             with open(src_path, "r", encoding="utf-8", errors="ignore") as f:
                 text = f.read()
-            st = os.stat(src_path)
-            fp = document_fingerprint(src_path, size_bytes=st.st_size, mtime=st.st_mtime)
-            ctx_id = f"ctx_{fp[:16]}"
+            # Deterministic, content-derived vault namespace (variant "orig" for generic md).
+            ctx_id = derive_context_id(text, "orig")
             if args.mode == "deterministic":
                 res = domain_anonymize(
                     text,

@@ -178,10 +178,75 @@ def _persist_step3(
         )
 
 
-def _persist_merged_metadata(doc_uid: str, merged_meta: dict[str, Any]) -> None:
+def write_merged_metadata(doc_uid: str, merged_meta: dict[str, Any]) -> None:
+    """Write the per-document metadata sidecar ``outputs/artifacts/{doc_uid}/metadata_merged.json``.
+
+    Public so callers that bind a single LLM-generated payload to multiple document variants
+    (see :func:`bind_variant_metadata`) reuse the same on-disk schema/location.
+    """
     out_path = ARTIFACTS_ROOT / doc_uid / "metadata_merged.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(merged_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# Backwards-compatible private alias used within run_step3.
+_persist_merged_metadata = write_merged_metadata
+
+
+def bind_variant_metadata(
+    *,
+    english_uid: str,
+    original_uid: Optional[str],
+    english_meta: dict[str, Any],
+    original_meta: Optional[dict[str, Any]],
+    summary: str,
+    keywords: List[str],
+) -> dict[str, Any]:
+    """Attach one LLM-generated metadata payload to both document variants.
+
+    The summary/keywords are generated once over the anonymized English variant and bound to
+    both the original and English ``doc_uid`` with explicit cross-variant links, so the
+    representations stay connected as one logical document (návrh 2.3.6 / 2.3.7). Each variant
+    keeps its OWN canonical metadata (e.g. the original may carry ``language: sk``) but shares
+    the same payload and link block. When ``original_uid`` is ``None`` (already-English source)
+    only the English sidecar is written.
+
+    Returns ``{"english": <merged>, "original": <merged>|None}``.
+    """
+    payload = {
+        "summary_one_sentence": summary,
+        "keywords_top5": keywords,
+        "tool_versions": {"summarizer_policy_version": SUMMARIZER_POLICY_VERSION},
+    }
+    variants: dict[str, str] = {"en": english_uid}
+    if original_uid is not None:
+        variants["orig"] = original_uid
+    links = {
+        "variants": dict(variants),
+        "metadata_source": {"variant": "en", "document_uid": english_uid},
+    }
+
+    en_merged = {
+        **english_meta,
+        **payload,
+        "variant": "en",
+        "document_uid": english_uid,
+        **links,
+    }
+    write_merged_metadata(english_uid, en_merged)
+
+    orig_merged: Optional[dict[str, Any]] = None
+    if original_uid is not None:
+        orig_merged = {
+            **(original_meta or {}),
+            **payload,
+            "variant": "orig",
+            "document_uid": original_uid,
+            **links,
+        }
+        write_merged_metadata(original_uid, orig_merged)
+
+    return {"english": en_merged, "original": orig_merged}
 
 
 # -----------------------------

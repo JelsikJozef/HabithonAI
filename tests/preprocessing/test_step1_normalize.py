@@ -78,10 +78,11 @@ def test_step1_happy_path_creates_artifacts_and_is_deterministic(
     assert logs, "Expected a log file with uid and run_id"
 
 
-def test_step1_failure_on_non_en_language_does_not_emit_normalized(
+def test_step1_failure_on_non_en_language_for_english_variant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    # Arrange
+    # The language gate is variant-aware: the ENGLISH variant must be English (it feeds the
+    # EN-only Step3/LLM), so language="sk" on the "english" variant is rejected.
     input_text = "No PII here."
     meta = {
         "doc_type": "note",
@@ -97,7 +98,7 @@ def test_step1_failure_on_non_en_language_does_not_emit_normalized(
     monkeypatch.setattr(step1_mod, "LOGS_ROOT", tmp_path / "logs")
 
     # Act
-    result = run_step1(Step1Inputs(text=input_text, meta=meta, context=context))
+    result = run_step1(Step1Inputs(text=input_text, meta=meta, context=context, variant="english"))
 
     # Assert
     assert result["status"] == "failed"
@@ -110,6 +111,34 @@ def test_step1_failure_on_non_en_language_does_not_emit_normalized(
     # Checks contain invalid_language error
     errors = result["checks"]["meta_validation"]["errors"]
     assert any(e.get("code") == "invalid_language" for e in errors)
+
+
+def test_step1_allows_non_en_language_for_original_variant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # The original variant may carry its native language; Step1 normalization/segmentation
+    # are language-agnostic, so a "sk" original passes (it never reaches Step3).
+    input_text = "Žiadne osobné údaje tu nie sú."
+    meta = {
+        "doc_type": "note",
+        "category": "general",
+        "language": "sk",
+        "anonymizer_versions": {"rule": "1.0.0"},
+    }
+    context = {"run_id": "runSK"}
+
+    from src.preprocessing.app import normalize as step1_mod
+
+    monkeypatch.setattr(step1_mod, "ARTIFACTS_ROOT", tmp_path / "artifacts")
+    monkeypatch.setattr(step1_mod, "LOGS_ROOT", tmp_path / "logs")
+
+    result = run_step1(Step1Inputs(text=input_text, meta=meta, context=context, variant="original"))
+
+    assert result["status"] == "ok", result["checks"]
+    errors = result["checks"]["meta_validation"]["errors"]
+    assert not any(e.get("code") == "invalid_language" for e in errors)
+    uid = result["document_uid"]
+    assert (tmp_path / "artifacts" / uid / "step1" / "normalized.txt").exists()
 
 
 def test_step1_passes_with_pseudonym_token_containing_digit_run(

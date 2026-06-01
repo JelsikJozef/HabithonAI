@@ -147,16 +147,21 @@ def _setup_logger(doc_uid: str, run_id: str | None) -> logging.Logger:
 # -----------------------------
 
 
-def _validate_meta(meta: Dict[str, Any]) -> tuple[bool, list[dict[str, str]]]:
+def _validate_meta(
+    meta: Dict[str, Any], variant: str = "orig"
+) -> tuple[bool, list[dict[str, str]]]:
     errors: list[dict[str, str]] = []
     required = ["doc_type", "category", "language", "anonymizer_versions"]
     for k in required:
         if k not in meta or (isinstance(meta[k], str) and meta[k].strip() == ""):
             errors.append({"code": "missing_meta", "field": k})
-    # language must be en
-    lang = meta.get("language")
-    if lang is not None and str(lang).lower() != "en":
-        errors.append({"code": "invalid_language", "field": "language"})
+    # Language gate is variant-aware: the English variant must be English (it is the only
+    # variant that feeds the EN-only Step3/LLM), while the original variant may carry its
+    # native language (e.g. "sk"/"de"). Normalization/segmentation are language-agnostic.
+    if _normalize_variant(variant) == "en":
+        lang = meta.get("language")
+        if lang is not None and str(lang).lower() != "en":
+            errors.append({"code": "invalid_language", "field": "language"})
     return len(errors) == 0, errors
 
 
@@ -210,7 +215,7 @@ def run_step1(inputs: Step1Inputs) -> Dict[str, Any]:
 
     # Canonical metadata and validation
     canonical_meta = _canonicalize_meta(inputs.meta or {}, inputs.variant)
-    meta_ok, meta_errors = _validate_meta(canonical_meta)
+    meta_ok, meta_errors = _validate_meta(canonical_meta, inputs.variant)
 
     # Compute content hash and document UID regardless, to have a stable reference
     content_hash = _compute_content_hash(normalized_text, canonical_meta)

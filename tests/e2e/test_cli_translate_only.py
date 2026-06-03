@@ -11,9 +11,12 @@ def test_cli_translate_only_offline(tmp_path, monkeypatch):
     src = tmp_path / "src"
     out = tmp_path / "out"
     src.mkdir()
-    # Content crafted to trigger heuristic 'sk' detection (contains " a je ")
+    # Sentence that detects as 'sk' and yields a confident EN translation (en_conf >= tau_en).
     md = src / "doc.md"
-    md.write_text("Toto a je test.\n", encoding="utf-8")
+    md.write_text(
+        "Spoločnosť minulý rok dosiahla rekordné tržby a zisk vo všetkých regiónoch.\n",
+        encoding="utf-8",
+    )
     report = tmp_path / "report.json"
 
     # Run CLI main in translate-only mode (skip convert phase), offline
@@ -45,6 +48,6 @@ def test_cli_translate_only_offline(tmp_path, monkeypatch):
     if code == 3:
         assert "error" in tr
     else:
-        # English variant should be written under out/en
-        en_md = out / "en" / "doc.md"
+        # English variant is written under out/en with the enforced "_en" suffix policy.
+        en_md = out / "en" / "doc_en.md"
         assert en_md.exists()

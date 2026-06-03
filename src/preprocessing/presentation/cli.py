@@ -1584,6 +1584,7 @@ def _run_pipeline_phase(
         return -1, {"docs_total": 0, "processed": 0, "failed": 0, "results": []}
 
     try:
+        from anonymization.adapters.container import build_default
         from anonymization.app.services.pii_service import PiiService
 
         from ..adapters.storage.anonymized_storage import AnonymizedFileStorage
@@ -1593,7 +1594,11 @@ def _run_pipeline_phase(
         logging.error("Pipeline components unavailable: %s", e)
         return 3, {"error": f"Pipeline components unavailable: {e}"}
 
-    anonymizer = PiiService()
+    # Honor ANON_DETECTORS (+ ANON_VAULT_DIR / ANON_POSTGRES_DSN) via the anonymization
+    # container so offline/regex mode actually engages RegexDetector instead of silently
+    # defaulting to Presidio. Vault wiring matches PiiService's default file vault.
+    detectors, vault = build_default()
+    anonymizer = PiiService(detectors=detectors, vault=vault)
     storage = AnonymizedFileStorage(cfg.out)
     tenant_id = getattr(ns, "anon_tenant", None)
     run_id = datetime.now(UTC).isoformat()

@@ -332,8 +332,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--anonymize-en",
         action="store_true",
         help=(
-            "After creating English variants, also write anonymized copies under out/hashed_documents "
-            "with the _anon.md suffix"
+            "Run the full per-document pipeline via the orchestrator: for each (original, "
+            "English) pair anonymize -> Step1 -> Step2 (-> Step3 on EN) and persist artifacts "
+            "under outputs/artifacts/{doc_uid}/ plus a readable hashed_documents/_anon.md for "
+            "the English variant. Requires --make-english."
         ),
     )
     anon.add_argument(
@@ -342,17 +344,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Optional tenant identifier to scope hashing tokens (default: none)",
     )
 
-    # Metadata + Vector store
-    meta = parser.add_argument_group("Metadata & Vector store")
+    # Metadata (LLM Step3)
+    meta = parser.add_argument_group("Metadata (LLM Step3)")
     meta.add_argument(
         "--with-metadata",
         action="store_true",
-        help="Generate summary+tags metadata from anonymized English content",
+        help="Deprecated/no-op: LLM metadata (Step3) now runs by default with --anonymize-en.",
     )
     meta.add_argument(
-        "--vector-store",
+        "--no-metadata",
+        "--offline",
+        dest="no_metadata",
         action="store_true",
-        help="Persist records into a vector store (local JSONL placeholder by default)",
+        help=(
+            "Skip the LLM metadata step (Step3) so the whole pipeline runs offline with no "
+            "OpenAI call; no metadata_merged.json is written."
+        ),
     )
 
     diag = parser.add_argument_group("Logging & diagnostics")
@@ -934,14 +941,16 @@ def _run_translation_phase(
     cfg: EffectiveConfig,
     convert_code: int,
     convert_results: list[Mapping[str, Any]],
-) -> tuple[int, dict | None]:
-    """Run translate(EN) flow if requested; returns (exit_code_override, report_section).
+) -> tuple[int, dict[str, Any] | None, list[tuple[Any, str, str | None]]]:
+    """Run translate(EN) flow if requested; returns (exit_override, report_section, pairs).
 
     exit_code_override: 0/1/3 to override main code, or -1 to keep convert_code.
-    report_section: Optional JSON-serializable section to merge into main report under key "translation".
+    report_section: Optional JSON-serializable section merged into the report under "translation".
+    pairs: list of (original MarkdownDoc, english_written_path, src_lang) for documents whose
+        English variant is available -- consumed by the orchestrator pipeline phase.
     """
     if not getattr(ns, "make_english", False):
-        return -1, None
+        return -1, None, []
 
     # Lazy imports to avoid heavy startup
     try:
@@ -951,7 +960,7 @@ def _run_translation_phase(
         from ..domain.ports import WriterContext  # type: ignore
     except Exception as e:
         logging.error("Translation components unavailable: %s", e)
-        return 3, {"error": f"Translation components unavailable: {e}"}
+        return 3, {"error": f"Translation components unavailable: {e}"}, []
 
     # Start from settings and apply CLI overrides (pure data)
     settings = dict(st.TRANSLATION)
@@ -1053,7 +1062,7 @@ def _run_translation_phase(
         for msg in issues:
             logging.error("Config: %s", msg)
         logging.error("Translation settings invalid; aborting")
-        return 3, {"error": "Translation settings invalid", "issues": issues}
+        return 3, {"error": "Translation settings invalid", "issues": issues}, []
 
     logging.info("Translate capabilities: %s", st.capabilities_summary(settings))
 
@@ -1220,7 +1229,7 @@ def _run_translation_phase(
                 translator.load()  # type: ignore[attr-defined]
             except Exception as e:
                 logging.error("CT2/NLLB load failed: %s", e)
-                return 3, {"error": f"CT2/NLLB load failed: {e}"}
+                return 3, {"error": f"CT2/NLLB load failed: {e}"}, []
             # Prepare a Marian secondary for mixed-language fallback
             translator_secondary = None
             try:
@@ -1251,7 +1260,7 @@ def _run_translation_phase(
                 logging.warning("Secondary Marian translator unavailable: %s", e)
         else:
             logging.error("Unknown translator engine: %s", engine)
-            return 2, {"error": f"Unknown translator engine: {engine}"}
+            return 2, {"error": f"Unknown translator engine: {engine}"}, []
 
         # Provide advanced validators (English detector + similarity) for routing when available
         english_detector = None
@@ -1279,7 +1288,7 @@ def _run_translation_phase(
 
     except Exception as e:
         logging.error("Translation components unavailable: %s", e)
-        return 3, {"error": f"Translation components unavailable: {e}"}
+        return 3, {"error": f"Translation components unavailable: {e}"}, []
 
     # Prepare writer context
     class _SimpleWriterCtx:
@@ -1528,247 +1537,120 @@ def _run_translation_phase(
         "results": batch.get("results", []),
     }
 
-    return exit_override, report_section
+    # Pair each original MarkdownDoc (input order) with its English variant for the
+    # orchestrator pipeline phase. Only docs with a usable English file are forwarded.
+    pairs: list[tuple[Any, str, str | None]] = []
+    _usable = {"created", "skipped_exists", "skipped_already_en"}
+    for od, res_item in zip(docs, batch.get("results", [])):
+        written = res_item.get("written_path")
+        if written and res_item.get("status") in _usable:
+            pairs.append((od, str(written), res_item.get("src_lang")))
+
+    return exit_override, report_section, pairs
 
 
-def _run_anonymize_phase(
+def _cli_canonical_meta(language: str | None) -> dict[str, Any]:
+    """Canonical Step1 metadata for a CLI-produced variant (Step1 requires these keys)."""
+    import os
+
+    detector = (os.getenv("ANON_DETECTORS", "presidio") or "presidio").strip().lower()
+    return {
+        "doc_type": "document",
+        "category": "general",
+        "language": (language or "en"),
+        "anonymizer_versions": {"detector": detector},
+    }
+
+
+def _run_pipeline_phase(
     ns: argparse.Namespace,
     cfg: EffectiveConfig,
+    pairs: list[tuple[Any, str, str | None]],
     *,
-    en_root: Path,
-) -> tuple[int, dict | None]:
+    run_step3: bool,
+) -> tuple[int, dict[str, Any] | None]:
+    """Run the ProcessingOrchestrator for each (original, English) pair.
+
+    For each pair: anonymize -> Step1 -> Step2 for both variants (Step3 on EN when
+    ``run_step3``), bound metadata on both, and a readable ``hashed_documents/_anon.md`` for
+    the English variant. Returns (exit_override, report_section). Gated by --anonymize-en.
+    """
     if not getattr(ns, "anonymize_en", False):
         return -1, None
-    try:
-        # App-layer use-case and storage adapter
-        from ..app.anonymize import anonymize_translated_document as _anon_usecase  # type: ignore
-        from ..adapters.storage.anonymized_storage import (  # type: ignore
-            AnonymizedFileStorage as _Storage,
+    if not pairs:
+        logging.warning(
+            "--anonymize-en: no English variants available; did you pass --make-english?"
         )
-    except Exception as e:
-        logging.error("Anonymization components unavailable: %s", e)
-        return 3, {"error": f"Anonymization components unavailable: {e}"}
+        return -1, {"docs_total": 0, "processed": 0, "failed": 0, "results": []}
 
-    tenant_id = getattr(ns, "anon_tenant", None)
-
-    # Enumerate English Markdown and prepare output storage
-    en_root = en_root.resolve()
-    if not en_root.exists():
-        logging.warning("English root not found: %s", str(en_root))
-        return 0, {"docs_total": 0, "created": 0, "failed": 0, "results": []}
-    storage = _Storage(cfg.out)
-
-    md_paths = _enumerate_md_under(en_root)
-    results: list[dict[str, Any]] = []
-    created = 0
-    failed = 0
-    for p in md_paths:
-        try:
-            rel = p.resolve().relative_to(en_root)
-        except Exception:
-            rel = p.name
-        # Stable document id for context grouping
-        doc_rel = rel.as_posix() if isinstance(rel, Path) else str(rel)
-        document_id = f"md::{doc_rel}"
-        try:
-            # Run use-case (pure). Token mappings are persisted to the single domain Token
-            # Vault (keyed by the variant-scoped context_id); no separate sidecar is written.
-            res = _anon_usecase(document_id, p, tenant_id=tenant_id, language="en")
-            # Persist anonymized copy
-            if not cfg.dry_run:
-                dst = storage.write(p, res.anonymized_text)
-            else:
-                dst = storage.compute_target_path(p)
-            created += 1
-            logging.info(
-                "Anonymizing %s -> %s",
-                Path(p).name,
-                Path(dst).name,
-            )
-            results.append(
-                {
-                    "status": "ok",
-                    "src": str(p),
-                    "dst": str(dst),
-                    "mappings": len(res.mappings),
-                }
-            )
-        except Exception as e:
-            failed += 1
-            results.append({"status": "failed", "src": str(p), "error": str(e)})
-
-    section = {
-        "docs_total": len(md_paths),
-        "created": created,
-        "failed": failed,
-        "results": results,
-        "out_root": str(storage.hashed_root.resolve()),
-    }
-    # Exit override only when all failed and there were docs
-    exit_override = 1 if failed and failed == len(md_paths) else -1
-    return exit_override, section
-
-
-def _run_metadata_and_vector_phase(
-    ns: argparse.Namespace,
-    cfg: EffectiveConfig,
-    *,
-    hashed_root: Path,
-) -> tuple[int, dict | None]:
-    if not (getattr(ns, "with_metadata", False) or getattr(ns, "vector_store", False)):
-        return -1, None
     try:
-        from ..adapters.storage.anonymized_storage import AnonymizedFileStorage as _Storage  # type: ignore
+        from anonymization.app.services.pii_service import PiiService
+
+        from ..adapters.storage.anonymized_storage import AnonymizedFileStorage
+        from ..app.processing_orchestrator import process_document_pair
+        from ..domain.models_markdown import MarkdownDoc
     except Exception as e:
-        logging.error("Storage adapter unavailable: %s", e)
-        return 3, {"error": f"Storage adapter unavailable: {e}"}
+        logging.error("Pipeline components unavailable: %s", e)
+        return 3, {"error": f"Pipeline components unavailable: {e}"}
 
-    # Simple offline metadata generator
-    class _SimpleMetadataGen:
-        STOP = {
-            "the",
-            "and",
-            "for",
-            "with",
-            "that",
-            "this",
-            "from",
-            "have",
-            "are",
-            "not",
-            "you",
-            "your",
-            "has",
-            "was",
-            "but",
-            "his",
-            "her",
-            "its",
-            "our",
-            "their",
-        }
-
-        def generate(self, document_text: str) -> dict:
-            txt = (document_text or "").strip()
-            # Summary: first non-empty line (max 200 chars)
-            first_line = next((l.strip() for l in txt.splitlines() if l.strip()), "")
-            summary = (first_line[:200]).strip()
-            # Tags: top distinct words
-            import re
-
-            words = [w.lower() for w in re.findall(r"[A-Za-z]{3,}", txt)]
-            freq: dict[str, int] = {}
-            for w in words:
-                if w in self.STOP:
-                    continue
-                freq[w] = freq.get(w, 0) + 1
-            tags = [w for w, _c in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:8]]
-            return {"summary": summary, "tags": tags}
-
-    storage = _Storage(cfg.out)
-    hashed_root = hashed_root.resolve()
-    if not hashed_root.exists():
-        logging.warning("Anonymized root not found: %s", str(hashed_root))
-        return 0, {"docs_total": 0, "processed": 0, "failed": 0, "results": []}
-
-    # Enumerate anonymized markdown files
-    anon_paths: list[Path] = []
-    for dp, _dns, fns in __import__("os").walk(hashed_root):
-        d = Path(dp)
-        for name in fns:
-            if name.lower().endswith("_anon.md"):
-                anon_paths.append((d / name).resolve())
-    anon_paths.sort(key=lambda p: str(p))
+    anonymizer = PiiService()
+    storage = AnonymizedFileStorage(cfg.out)
+    tenant_id = getattr(ns, "anon_tenant", None)
+    run_id = datetime.now(UTC).isoformat()
 
     results: list[dict[str, Any]] = []
     processed = 0
     failed = 0
-    gen = _SimpleMetadataGen()
-
-    # Prepare vector store JSONL path
-    vs_dir = cfg.out / "vector_store"
-    vs_dir.mkdir(parents=True, exist_ok=True)
-    vs_jsonl = vs_dir / "records.jsonl"
-
-    for a in anon_paths:
+    for original, en_path, src_lang in pairs:
+        doc_id = getattr(original, "doc_id", None)
         try:
-            # Derive document_id from English relative path
-            en_path = storage.resolve_en_path(a)
-            try:
-                rel = en_path.resolve().relative_to((cfg.out / "en").resolve()).as_posix()
-            except Exception:
-                rel = en_path.name
-            document_id = f"md::{rel}"
-
-            text = _load_md_text(a)
-            metadata: dict[str, Any] | None = None
-            if getattr(ns, "with_metadata", False):
-                logging.info("Generating metadata for %s", a.name)
-                metadata = gen.generate(text)
-                # Write metadata sidecar next to anonymized file
-                try:
-                    meta_sidecar = Path(str(a) + ".meta.json")
-                    meta_sidecar.write_text(
-                        json.dumps(metadata, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                        newline="\n",
-                    )
-                except Exception as e:
-                    logging.warning("Failed to write metadata sidecar for %s: %s", str(a), e)
-
-            # De-anonymize via the single domain Token Vault. The context_id is recomputed
-            # from the still-present EN source file (same derivation as the anonymize phase),
-            # so no per-file mapping sidecar is needed.
-            restored_text = text
-            try:
-                from src.shared.hashing import derive_context_id
-
-                from ..adapters.deanonymizer.vault_deanonymizer import (  # type: ignore
-                    VaultDeAnonymizer,
-                )
-
-                en_text = en_path.read_text(encoding="utf-8")
-                ctx_id = derive_context_id(en_text, "en")
-                restored_text = VaultDeAnonymizer().restore(text, context_id=ctx_id)
-            except Exception as e:
-                logging.warning("De-anonymization failed for %s: %s", a.name, e)
-
-            # Vector store persistence (JSONL placeholder)
-            if getattr(ns, "vector_store", False):
-                logging.info("Storing into vector store: %s", document_id)
-                rec = {
-                    "document_id": document_id,
-                    "path_anonymized": str(a),
-                    "path_english": str(en_path),
-                    "metadata": metadata or {},
-                    "anonymized_preview": (text[:200] or ""),
-                    "restored_preview": (restored_text[:200] or ""),
-                }
-                # Append one line JSON
-                with vs_jsonl.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-
+            orig_doc = original.copy_with(lang=src_lang, meta=_cli_canonical_meta(src_lang))
+            en_doc = MarkdownDoc(
+                doc_id=str(doc_id or "md::?"),
+                path=str(en_path),
+                variant="english",
+                lang="en",
+                text_md=_load_md_text(Path(en_path)),
+                meta=_cli_canonical_meta("en"),
+            )
+            res = process_document_pair(
+                orig_doc,
+                en_doc,
+                anonymizer,
+                run_step3=run_step3,
+                tenant_id=tenant_id,
+                context={"run_id": run_id},
+            )
+            if res.status != "ok":
+                failed += 1
+                results.append({"status": "failed", "doc_id": doc_id, "errors": res.errors})
+                continue
+            # Readable anonymized markdown for the EN variant (3.2.5 hashed_documents layout).
+            if not cfg.dry_run and res.english is not None:
+                anon_en_text = (res.english.step1 or {}).get("normalized_text", "")
+                storage.write(en_path, anon_en_text)
             processed += 1
             results.append(
                 {
                     "status": "ok",
-                    "doc_id": document_id,
-                    "anon": str(a),
-                    "en": str(en_path),
+                    "doc_id": doc_id,
+                    "orig_uid": res.original.document_uid if res.original else None,
+                    "en_uid": res.english.document_uid if res.english else None,
+                    "metadata_bound": res.metadata_bound,
                 }
             )
         except Exception as e:
             failed += 1
-            results.append({"status": "failed", "anon": str(a), "error": str(e)})
+            results.append({"status": "failed", "doc_id": doc_id, "error": str(e)})
 
     section = {
-        "docs_total": len(anon_paths),
+        "docs_total": len(pairs),
         "processed": processed,
         "failed": failed,
+        "step3": run_step3,
         "results": results,
-        "vector_store_path": str(vs_jsonl),
     }
-    exit_override = 1 if failed and failed == len(anon_paths) else -1
+    exit_override = 1 if failed and failed == len(pairs) else -1
     return exit_override, section
 
 
@@ -1835,23 +1717,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             float(final_summary.get("duration_sec") or 0.0),
         )
 
-    # Optional translation phase
-    exit_override, translation_section = _run_translation_phase(ns, cfg, convert_code, results)
-
-    # Optional anonymization phase over out/en
-    anon_exit, anonym_section = _run_anonymize_phase(ns, cfg, en_root=cfg.out / "en")
-    if anon_exit in (0, 1, 2, 3):
-        # Prefer more severe exit code
-        if anon_exit > (exit_override if exit_override in (0, 1, 2, 3) else -1):
-            exit_override = anon_exit
-
-    # Optional metadata + vector phase over out/hashed_documents
-    meta_exit, meta_section = _run_metadata_and_vector_phase(
-        ns, cfg, hashed_root=cfg.out / "hashed_documents"
+    # Optional translation phase (also yields original/english pairs for the pipeline).
+    exit_override, translation_section, pairs = _run_translation_phase(
+        ns, cfg, convert_code, results
     )
-    if meta_exit in (0, 1, 2, 3):
-        if meta_exit > (exit_override if exit_override in (0, 1, 2, 3) else -1):
-            exit_override = meta_exit
+
+    # Optional full pipeline via the ProcessingOrchestrator (replaces the legacy anonymize +
+    # metadata phases). Step3 (LLM) is on by default; --no-metadata/--offline disables it.
+    run_step3 = not bool(getattr(ns, "no_metadata", False))
+    pipeline_exit, pipeline_section = _run_pipeline_phase(ns, cfg, pairs, run_step3=run_step3)
+    if pipeline_exit in (0, 1, 2, 3):
+        if pipeline_exit > (exit_override if exit_override in (0, 1, 2, 3) else -1):
+            exit_override = pipeline_exit
 
     # Optional JSON run report
     if cfg.report:
@@ -1864,10 +1741,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
             if translation_section is not None:
                 payload["translation"] = translation_section
-            if anonym_section is not None:
-                payload["anonymization"] = anonym_section
-            if meta_section is not None:
-                payload["metadata_vector"] = meta_section
+            if pipeline_section is not None:
+                payload["pipeline"] = pipeline_section
             with cfg.report.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
             logging.debug("Wrote report to %s", str(cfg.report))

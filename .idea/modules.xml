@@ -3,6 +3,8 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/HabithonAI.iml" filepath="$PROJECT_DIR$/.idea/HabithonAI.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/anonymization.iml" filepath="$PROJECT_DIR$/.idea/anonymization.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/habithon-preprocessing.iml" filepath="$PROJECT_DIR$/.idea/habithon-preprocessing.iml" />
     </modules>
   </component>
 </project>

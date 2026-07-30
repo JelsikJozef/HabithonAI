@@ -13,7 +13,7 @@ from ..qt import (
 )
 
 from ...services.facade import GuiServices
-from shared.hashing import document_fingerprint  # stable context id from file
+from shared.hashing import derive_context_id  # variant-scoped, content-derived context id
 from ..ui_helpers import auto_expand_combo, wrap_with_help, create_field_label  # new imports
 from ...services.async_worker import start_worker  # NEW
 
@@ -202,12 +202,10 @@ class AnonymizationTab(QWidget):
 
     def _derive_context_from_file(self, path: str) -> str:
         try:
-            import os
-
-            st = os.stat(path)
-            # Use fingerprint over (relative path, size, mtime) for a stable ID
-            fp = document_fingerprint(path, size_bytes=st.st_size, mtime=st.st_mtime)
-            return f"ctx_{fp[:16]}"
+            # Content-derived, deterministic vault namespace (variant "orig" for ad-hoc files).
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read()
+            return derive_context_id(text, "orig")
         except Exception:
             # Fallback to basename
             import os

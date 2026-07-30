@@ -78,10 +78,11 @@ def test_step1_happy_path_creates_artifacts_and_is_deterministic(
     assert logs, "Expected a log file with uid and run_id"
 
 
-def test_step1_failure_on_non_en_language_does_not_emit_normalized(
+def test_step1_failure_on_non_en_language_for_english_variant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    # Arrange
+    # The language gate is variant-aware: the ENGLISH variant must be English (it feeds the
+    # EN-only Step3/LLM), so language="sk" on the "english" variant is rejected.
     input_text = "No PII here."
     meta = {
         "doc_type": "note",
@@ -97,7 +98,7 @@ def test_step1_failure_on_non_en_language_does_not_emit_normalized(
     monkeypatch.setattr(step1_mod, "LOGS_ROOT", tmp_path / "logs")
 
     # Act
-    result = run_step1(Step1Inputs(text=input_text, meta=meta, context=context))
+    result = run_step1(Step1Inputs(text=input_text, meta=meta, context=context, variant="english"))
 
     # Assert
     assert result["status"] == "failed"
@@ -110,3 +111,129 @@ def test_step1_failure_on_non_en_language_does_not_emit_normalized(
     # Checks contain invalid_language error
     errors = result["checks"]["meta_validation"]["errors"]
     assert any(e.get("code") == "invalid_language" for e in errors)
+
+
+def test_step1_allows_non_en_language_for_original_variant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # The original variant may carry its native language; Step1 normalization/segmentation
+    # are language-agnostic, so a "sk" original passes (it never reaches Step3).
+    input_text = "Žiadne osobné údaje tu nie sú."
+    meta = {
+        "doc_type": "note",
+        "category": "general",
+        "language": "sk",
+        "anonymizer_versions": {"rule": "1.0.0"},
+    }
+    context = {"run_id": "runSK"}
+
+    from src.preprocessing.app import normalize as step1_mod
+
+    monkeypatch.setattr(step1_mod, "ARTIFACTS_ROOT", tmp_path / "artifacts")
+    monkeypatch.setattr(step1_mod, "LOGS_ROOT", tmp_path / "logs")
+
+    result = run_step1(Step1Inputs(text=input_text, meta=meta, context=context, variant="original"))
+
+    assert result["status"] == "ok", result["checks"]
+    errors = result["checks"]["meta_validation"]["errors"]
+    assert not any(e.get("code") == "invalid_language" for e in errors)
+    uid = result["document_uid"]
+    assert (tmp_path / "artifacts" / uid / "step1" / "normalized.txt").exists()
+
+
+def test_step1_passes_with_pseudonym_token_containing_digit_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A normalized doc containing a pseudonym token whose body has 10 consecutive
+    digits must not trip the anonymization-sanity guardrail (it is a replacement,
+    not a phone number). Step1 must succeed and emit normalized.txt."""
+    input_text = "Customer h:kid0:a1234567890bcdef0011223344556677 paid the invoice."
+    meta = {
+        "doc_type": "note",
+        "category": "general",
+        "language": "en",
+        "anonymizer_versions": {"rule": "1.0.0"},
+    }
+    context = {"run_id": "runTok"}
+
+    from src.preprocessing.app import normalize as step1_mod
+
+    monkeypatch.setattr(step1_mod, "ARTIFACTS_ROOT", tmp_path / "artifacts")
+    monkeypatch.setattr(step1_mod, "LOGS_ROOT", tmp_path / "logs")
+
+    result = run_step1(Step1Inputs(text=input_text, meta=meta, context=context))
+
+    assert result["status"] == "ok"
+    assert result["checks"]["anonymization_sanity"]["passed"] is True
+    assert result["checks"]["anonymization_sanity"]["patterns"]["phone"] is False
+    art_dir = tmp_path / "artifacts" / result["document_uid"] / "step1"
+    assert (art_dir / "normalized.txt").exists()
+
+
+def test_variant_disambiguates_doc_uid_for_already_english_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An already-English doc copied as the English variant has byte-identical text and
+    language='en'. The variant is the sole disambiguator: orig vs en must yield distinct
+    doc_uid / content_hash so their artifacts never overwrite each other."""
+    input_text = "This document is already written in English."
+    meta = {
+        "doc_type": "note",
+        "category": "general",
+        "language": "en",
+        "anonymizer_versions": {"rule": "1.0.0"},
+    }
+    context = {"run_id": "runV"}
+
+    from src.preprocessing.app import normalize as step1_mod
+
+    monkeypatch.setattr(step1_mod, "ARTIFACTS_ROOT", tmp_path / "artifacts")
+    monkeypatch.setattr(step1_mod, "LOGS_ROOT", tmp_path / "logs")
+
+    res_orig = run_step1(Step1Inputs(text=input_text, meta=meta, context=context, variant="orig"))
+    res_en = run_step1(Step1Inputs(text=input_text, meta=meta, context=context, variant="english"))
+
+    assert res_orig["status"] == "ok"
+    assert res_en["status"] == "ok"
+
+    # Distinct identifiers despite identical text + language
+    assert res_orig["document_uid"] != res_en["document_uid"]
+    assert res_orig["content_hash"] != res_en["content_hash"]
+
+    # Variant is the single disambiguator: present only for the non-original variant
+    assert "variant" not in res_orig["canonical_metadata"]
+    assert res_en["canonical_metadata"]["variant"] == "en"
+
+    # Artifacts live under distinct doc_uid directories (no overwrite)
+    orig_dir = tmp_path / "artifacts" / res_orig["document_uid"] / "step1"
+    en_dir = tmp_path / "artifacts" / res_en["document_uid"] / "step1"
+    assert orig_dir.is_dir() and en_dir.is_dir()
+    assert orig_dir != en_dir
+
+
+def test_orig_variant_preserves_doc_uid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Two original-variant runs of identical content keep the same doc_uid; the default
+    variant must not perturb existing identifiers."""
+    input_text = "Stable English content."
+    meta = {
+        "doc_type": "note",
+        "category": "general",
+        "language": "en",
+        "anonymizer_versions": {"rule": "1.0.0"},
+    }
+    context = {"run_id": "runS"}
+
+    from src.preprocessing.app import normalize as step1_mod
+
+    monkeypatch.setattr(step1_mod, "ARTIFACTS_ROOT", tmp_path / "artifacts")
+    monkeypatch.setattr(step1_mod, "LOGS_ROOT", tmp_path / "logs")
+
+    # Default variant ("orig") and explicit "original" must agree, and be stable.
+    res_default = run_step1(Step1Inputs(text=input_text, meta=meta, context=context))
+    res_original = run_step1(
+        Step1Inputs(text=input_text, meta=meta, context=context, variant="original")
+    )
+
+    assert res_default["document_uid"] == res_original["document_uid"]
+    assert res_default["content_hash"] == res_original["content_hash"]
+    assert "variant" not in res_default["canonical_metadata"]

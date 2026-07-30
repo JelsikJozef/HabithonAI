@@ -6,13 +6,16 @@ from ...domain.entities import TokenMapping
 from ...domain.errors import TokenVaultError
 from ...domain.ports import TokenVaultPort
 
+# Single canonical on-disk location for the Token Vault. Runtime data lives under
+# outputs/ next to outputs/artifacts/ (which context_id is linked to), not inside src/.
+# Override via the ANON_VAULT_DIR environment variable.
+DEFAULT_VAULT_DIR = "outputs/anonymization_vault"
+
 
 class FileTokenVault(TokenVaultPort):
     """Stores token mappings per context_id in JSON files under a base directory."""
 
-    def __init__(
-        self, base_dir: str = "src/anonymization/adapters/token_vault/.anonymization_vault"
-    ) -> None:
+    def __init__(self, base_dir: str = DEFAULT_VAULT_DIR) -> None:
         self.base_dir = base_dir
         os.makedirs(self.base_dir, exist_ok=True)
 

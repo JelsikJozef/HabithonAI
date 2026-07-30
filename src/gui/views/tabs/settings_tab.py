@@ -27,9 +27,7 @@ class SettingsTab(QWidget):
 
         form = QFormLayout()
         # Vault dir
-        self.vault_dir = QLineEdit(
-            os.getenv("ANON_VAULT_DIR", "src/anonymization/.anonymization_vault")
-        )
+        self.vault_dir = QLineEdit(os.getenv("ANON_VAULT_DIR", "outputs/anonymization_vault"))
         form.addRow(
             create_field_label(
                 "ANON_VAULT_DIR:", "Directory used by file token vault (set ANON_VAULT_DIR)"

@@ -8,8 +8,9 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
+from src.preprocessing.app.guardrails import anonymization_sanity
 from src.shared.llm.openai_client import summarize_keywords, OpenAIClientError
 
 # Stable policy descriptor for audit/versioning
@@ -101,27 +102,6 @@ def _compute_content_hash(normalized_text: str, canonical_meta: Dict[str, Any]) 
 
 
 # -----------------------------
-# Guardrails
-# -----------------------------
-
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_PHONE_RE = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
-_SSN_US_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
-
-
-def _anonymization_sanity(text: str) -> tuple[bool, dict[str, Any]]:
-    matches = {
-        "email": bool(_EMAIL_RE.search(text)),
-        "phone": bool(_PHONE_RE.search(text)),
-        "ssn_us": bool(_SSN_US_RE.search(text)),
-    }
-    placeholders_present = bool(re.search(r"\[(?:PERSON|EMAIL|PHONE|ADDRESS|ORG)]", text))
-    passed = not any(matches.values())
-    info = {"patterns": matches, "placeholders_present": placeholders_present}
-    return passed, info
-
-
-# -----------------------------
 # LLM output validation
 # -----------------------------
 
@@ -198,10 +178,75 @@ def _persist_step3(
         )
 
 
-def _persist_merged_metadata(doc_uid: str, merged_meta: dict[str, Any]) -> None:
+def write_merged_metadata(doc_uid: str, merged_meta: dict[str, Any]) -> None:
+    """Write the per-document metadata sidecar ``outputs/artifacts/{doc_uid}/metadata_merged.json``.
+
+    Public so callers that bind a single LLM-generated payload to multiple document variants
+    (see :func:`bind_variant_metadata`) reuse the same on-disk schema/location.
+    """
     out_path = ARTIFACTS_ROOT / doc_uid / "metadata_merged.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(merged_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# Backwards-compatible private alias used within run_step3.
+_persist_merged_metadata = write_merged_metadata
+
+
+def bind_variant_metadata(
+    *,
+    english_uid: str,
+    original_uid: Optional[str],
+    english_meta: dict[str, Any],
+    original_meta: Optional[dict[str, Any]],
+    summary: str,
+    keywords: List[str],
+) -> dict[str, Any]:
+    """Attach one LLM-generated metadata payload to both document variants.
+
+    The summary/keywords are generated once over the anonymized English variant and bound to
+    both the original and English ``doc_uid`` with explicit cross-variant links, so the
+    representations stay connected as one logical document (návrh 2.3.6 / 2.3.7). Each variant
+    keeps its OWN canonical metadata (e.g. the original may carry ``language: sk``) but shares
+    the same payload and link block. When ``original_uid`` is ``None`` (already-English source)
+    only the English sidecar is written.
+
+    Returns ``{"english": <merged>, "original": <merged>|None}``.
+    """
+    payload = {
+        "summary_one_sentence": summary,
+        "keywords_top5": keywords,
+        "tool_versions": {"summarizer_policy_version": SUMMARIZER_POLICY_VERSION},
+    }
+    variants: dict[str, str] = {"en": english_uid}
+    if original_uid is not None:
+        variants["orig"] = original_uid
+    links = {
+        "variants": dict(variants),
+        "metadata_source": {"variant": "en", "document_uid": english_uid},
+    }
+
+    en_merged = {
+        **english_meta,
+        **payload,
+        "variant": "en",
+        "document_uid": english_uid,
+        **links,
+    }
+    write_merged_metadata(english_uid, en_merged)
+
+    orig_merged: Optional[dict[str, Any]] = None
+    if original_uid is not None:
+        orig_merged = {
+            **(original_meta or {}),
+            **payload,
+            "variant": "orig",
+            "document_uid": original_uid,
+            **links,
+        }
+        write_merged_metadata(original_uid, orig_merged)
+
+    return {"english": en_merged, "original": orig_merged}
 
 
 # -----------------------------
@@ -246,7 +291,7 @@ def run_step3(inputs: Step3Inputs) -> Dict[str, Any]:
         "keywords_shape": False,
         "anonymization_sanity": False,
     }
-    anon_ok, anon_info = _anonymization_sanity(normalized_text)
+    anon_ok, anon_info = anonymization_sanity(normalized_text)
     checks["anonymization_sanity"] = anon_ok
     if not anon_ok:
         result = {

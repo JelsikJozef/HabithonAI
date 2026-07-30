@@ -4,7 +4,6 @@ import base64
 import hashlib
 import json
 import logging
-import re
 import sys
 import time
 from dataclasses import dataclass
@@ -15,6 +14,7 @@ from src.preprocessing.adapters.encoding.utf8_normalizer import (
     NormalizerOptions,
     normalize_text,
 )
+from src.preprocessing.app.guardrails import anonymization_sanity
 
 # Stable policy descriptor for audit/versioning
 NORMALIZATION_POLICY_VERSION = "step1-nfc-lf-v1"
@@ -32,6 +32,10 @@ class Step1Inputs:
     text: str
     meta: Dict[str, Any]
     context: Dict[str, Any]
+    # Document variant ("orig" vs "en"). It is the SOLE disambiguator that flows into
+    # the content hash so distinct variants of the same text never collide on doc_uid.
+    # Default "orig" keeps original-document identifiers unchanged.
+    variant: str = "orig"
 
 
 # -----------------------------
@@ -71,16 +75,35 @@ def _normalize_for_policy(text: str) -> Tuple[str, Dict[str, Any]]:
     return normalize_text(text, opts)
 
 
-def _canonicalize_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_variant(variant: str | None) -> str:
+    """Map domain variant labels to stable hash tokens.
+
+    "original" -> "orig", "english" -> "en"; recognized short tokens pass through.
+    Unknown/empty values default to "orig".
+    """
+    v = (variant or "orig").strip().lower()
+    mapping = {"original": "orig", "english": "en"}
+    return mapping.get(v, v) or "orig"
+
+
+def _canonicalize_meta(meta: Dict[str, Any], variant: str = "orig") -> Dict[str, Any]:
     """Select and sort stable metadata fields.
 
     Kept keys: doc_type, category, language, anonymizer_versions, source_path (optional).
     Excludes volatile fields like timestamps.
+
+    The variant is included ONLY when it is not the original ("orig"), so that original
+    documents retain their existing doc_uid while non-original variants (e.g. an English
+    copy of an already-English document) hash to a distinct doc_uid. This is the single
+    disambiguator; do not also encode the variant into chunk_id or artifact paths.
     """
     keys = ["doc_type", "category", "language", "anonymizer_versions"]
     out: Dict[str, Any] = {k: meta[k] for k in keys if k in meta}
     if "source_path" in meta:
         out["source_path"] = meta["source_path"]
+    v = _normalize_variant(variant)
+    if v != "orig":
+        out["variant"] = v
     # Sort keys by using JSON dumps with sort_keys=True later
     return out
 
@@ -124,35 +147,22 @@ def _setup_logger(doc_uid: str, run_id: str | None) -> logging.Logger:
 # -----------------------------
 
 
-def _validate_meta(meta: Dict[str, Any]) -> tuple[bool, list[dict[str, str]]]:
+def _validate_meta(
+    meta: Dict[str, Any], variant: str = "orig"
+) -> tuple[bool, list[dict[str, str]]]:
     errors: list[dict[str, str]] = []
     required = ["doc_type", "category", "language", "anonymizer_versions"]
     for k in required:
         if k not in meta or (isinstance(meta[k], str) and meta[k].strip() == ""):
             errors.append({"code": "missing_meta", "field": k})
-    # language must be en
-    lang = meta.get("language")
-    if lang is not None and str(lang).lower() != "en":
-        errors.append({"code": "invalid_language", "field": "language"})
+    # Language gate is variant-aware: the English variant must be English (it is the only
+    # variant that feeds the EN-only Step3/LLM), while the original variant may carry its
+    # native language (e.g. "sk"/"de"). Normalization/segmentation are language-agnostic.
+    if _normalize_variant(variant) == "en":
+        lang = meta.get("language")
+        if lang is not None and str(lang).lower() != "en":
+            errors.append({"code": "invalid_language", "field": "language"})
     return len(errors) == 0, errors
-
-
-# Reasonably obvious PII patterns
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_PHONE_RE = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
-_SSN_US_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
-
-
-def _anonymization_sanity(text: str) -> tuple[bool, dict[str, Any]]:
-    matches = {
-        "email": bool(_EMAIL_RE.search(text)),
-        "phone": bool(_PHONE_RE.search(text)),
-        "ssn_us": bool(_SSN_US_RE.search(text)),
-    }
-    placeholders_present = bool(re.search(r"\[(?:PERSON|EMAIL|PHONE|ADDRESS|ORG)]", text))
-    passed = not any(matches.values())
-    info = {"patterns": matches, "placeholders_present": placeholders_present}
-    return passed, info
 
 
 def _determinism_check(
@@ -204,8 +214,8 @@ def run_step1(inputs: Step1Inputs) -> Dict[str, Any]:
         return status
 
     # Canonical metadata and validation
-    canonical_meta = _canonicalize_meta(inputs.meta or {})
-    meta_ok, meta_errors = _validate_meta(canonical_meta)
+    canonical_meta = _canonicalize_meta(inputs.meta or {}, inputs.variant)
+    meta_ok, meta_errors = _validate_meta(canonical_meta, inputs.variant)
 
     # Compute content hash and document UID regardless, to have a stable reference
     content_hash = _compute_content_hash(normalized_text, canonical_meta)
@@ -215,8 +225,14 @@ def run_step1(inputs: Step1Inputs) -> Dict[str, Any]:
     run_id = str(inputs.context.get("run_id", "")) if isinstance(inputs.context, dict) else ""
     logger = _setup_logger(document_uid, run_id or None)
 
+    # Token Vault context for this variant (set by the orchestrator). Recorded in the
+    # artifact only -- it never feeds the content hash / doc_uid. It links this artifact
+    # back to the vault entry so deanonymization-by-doc_uid can resolve the mappings.
+    context_id = inputs.context.get("context_id") if isinstance(inputs.context, dict) else None
+    context_id = str(context_id) if context_id is not None else None
+
     # Anonymization sanity
-    anon_ok, anon_info = _anonymization_sanity(normalized_text)
+    anon_ok, anon_info = anonymization_sanity(normalized_text)
 
     # Determinism check (should always pass)
     deterministic = _determinism_check(normalized_text, canonical_meta, content_hash, document_uid)
@@ -253,6 +269,7 @@ def run_step1(inputs: Step1Inputs) -> Dict[str, Any]:
     output: Dict[str, Any] = {
         "document_uid": document_uid,
         "content_hash": content_hash,
+        "context_id": context_id,
         "normalized_text": normalized_text,
         "canonical_metadata": canonical_meta,
         "normalization_policy_version": NORMALIZATION_POLICY_VERSION,
@@ -293,6 +310,7 @@ def run_step1(inputs: Step1Inputs) -> Dict[str, Any]:
     summary_lines = [
         f"document_uid: {document_uid}",
         f"content_hash: {content_hash}",
+        f"context_id: {context_id or ''}",
         f"policy: {NORMALIZATION_POLICY_VERSION}",
         f"size_bytes: {size_bytes}",
         f"doc_type: {canonical_meta.get('doc_type')}",
@@ -341,8 +359,9 @@ def main(argv: list[str] | None = None) -> int:
     text = payload.get("text", "")
     meta = payload.get("meta", {})
     context = payload.get("context", {})
+    variant = payload.get("variant", "orig")
 
-    result = run_step1(Step1Inputs(text=text, meta=meta, context=context))
+    result = run_step1(Step1Inputs(text=text, meta=meta, context=context, variant=variant))
 
     if args.print_uid and isinstance(result, dict):
         print(result.get("document_uid", ""))

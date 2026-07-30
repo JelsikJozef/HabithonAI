@@ -45,6 +45,7 @@ from typing import Any
 from preprocessing.domain.errors import TranslationError
 from preprocessing.domain.models_markdown import MarkdownDoc
 from preprocessing.domain.ports import CachePort, GlossaryPort, TranslatePort
+from preprocessing.domain.ports import LanguageDetectPort  # new import for per-segment LangID
 
 # Local Markdown segmentation utilities
 from . import markdown_segmenter as mdseg
@@ -133,6 +134,7 @@ class MarianOpus(TranslatePort):
         glossary: GlossaryPort | None = None,
         cache: CachePort | None = None,
         segmenter: Any | None = None,
+        segment_langid: LanguageDetectPort | None = None,  # NEW: optional per-segment detector
     ) -> None:
         """Construct a Marian OPUS adapter with lazy per-language loading.
 
@@ -193,6 +195,9 @@ class MarianOpus(TranslatePort):
         self._glossary = glossary
         self._cache = cache
         self._segmenter = segmenter
+
+        # Optional per-segment language detector (mixed-language routing)
+        self._segment_langid: LanguageDetectPort | None = segment_langid
 
         self._eng = _DecodingConfig(
             num_beams=int(num_beams),
@@ -496,6 +501,12 @@ class MarianOpus(TranslatePort):
             meta["local_files_only"] = bool(self._eng.local_files_only)
             return doc.copy_with(variant="english", lang="en", text_md=doc.text_md, meta=meta)
 
+        # Determine if mixed-language per-segment routing is requested and possible
+        opts = dict(options or {})
+        mixed_per_segment = bool(opts.get("mixed_lang_per_segment", False)) and (
+            self._segment_langid is not None
+        )
+
         # Glossary pre
         def _glossary_pre(text: str) -> str:
             if self._glossary and self._glossary_mode in {"pre", "both"}:
@@ -509,104 +520,224 @@ class MarianOpus(TranslatePort):
                     )
             return text
 
-        # 2) Cache + plan misses (before loading heavy model)
-        engine_key = self._compute_model_fingerprint(self._models[src])
+        engine_key_by_src: dict[str, str] = {}
+
+        def _engine_key(s: str) -> str:
+            if s not in engine_key_by_src:
+                engine_key_by_src[s] = self._compute_model_fingerprint(self._models[s])
+            return engine_key_by_src[s]
+
         total = len(segments)
         cached = 0
         batched_calls = 0
         translated_map: dict[str, str] = {}
-        to_translate: list[tuple[str, str]] = []  # (seg_id, preprocessed_text)
 
-        for seg in segments:
-            inp = _glossary_pre(seg.text)
-            cache_val: str | None = None
-            if self._cache and self._cache_enabled:
-                key = self._make_cache_key(inp, src, "en", engine_key, glossary_id)
+        if mixed_per_segment:
+            # Detect language per segment, group, then translate by group
+            supported = set(self._models.keys())
+            groups: dict[str, list[tuple[str, str]]] = {}
+            # Detect
+            for seg in segments:
+                seg_text = _glossary_pre(seg.text)
+                seg_src = src_lang.lower()
                 try:
-                    cache_val = self._cache.get(key)
-                except Exception:
-                    cache_val = None
-            if cache_val is not None:
-                translated_map[seg.id] = cache_val
-                cached += 1
-            else:
-                to_translate.append((seg.id, inp))
-
-        # Load model/tokenizer only if we have misses
-        if to_translate:
-            self.load(src)
-
-        # 3) Translate misses deterministically in batches
-        t_tr0 = time.perf_counter()
-        if to_translate:
-            # Potential safe sub-splitting by tokenizer token budget (input side)
-            engine = self._engines[src]
-            tokenizer = engine["tokenizer"]
-            # We avoid truncation; split conservatively by sentences/words.
-            batch_texts: list[str] = []
-            batch_owner: list[str] = []  # original seg id
-
-            for seg_id, text in to_translate:
-                parts = self._split_by_tokens(
-                    tokenizer, text, max_tokens_input=self._estimate_input_budget(tokenizer)
-                )
-                for p in parts:
-                    batch_texts.append(p)
-                    batch_owner.append(seg_id)
-
-            # Execute in fixed-size batches
-            out_texts: list[str] = []
-            out_owner: list[str] = []
-            for i in range(0, len(batch_texts), self._eng.max_batch_size):
-                sl = slice(i, min(i + self._eng.max_batch_size, len(batch_texts)))
-                chunk_inputs = batch_texts[sl]
-                chunk_owner = batch_owner[sl]
-                try:
-                    chunk_outputs = self._translate_batch_texts(chunk_inputs, src_lang=src)
-                except TranslationError:
-                    raise
-                except Exception as exc:
-                    raise TranslationError(
-                        "batch failed",
-                        {
-                            "reason": "BATCH_GENERATION_FAILED",
-                            "message": str(exc.__class__.__name__),
-                            "count": len(chunk_inputs),
-                        },
+                    code, _conf = self._segment_langid.detect(
+                        seg.text,
+                        hints={"candidates": list(supported)},
+                        context={"seg_id": seg.id, "doc_id": getattr(doc, "doc_id", None)},
                     )
-                out_texts.extend(chunk_outputs)
-                out_owner.extend(chunk_owner)
-                batched_calls += 1
+                    code = (code or "").lower()
+                    if code in supported:
+                        seg_src = code
+                except Exception:
+                    seg_src = src_lang.lower()
+                groups.setdefault(seg_src, []).append((seg.id, seg_text))
 
-            # Reassemble subparts into full segment translations, apply post-glossary, and cache
-            per_seg: dict[str, list[str]] = {}
-            for sid, txt in zip(out_owner, out_texts):
-                per_seg.setdefault(sid, []).append(txt)
-
-            for sid, parts in per_seg.items():
-                full = "".join(parts)
-                # Post-glossary
-                if self._glossary and self._glossary_mode in {"post", "both"}:
-                    try:
-                        full = self._glossary.apply(
-                            full, src_lang=src, tgt_lang="en", mode="post", glossary_id=glossary_id
+            # Translate group-by-group
+            for g_src, items in groups.items():
+                # Cache lookup and misses collection for this group
+                to_translate: list[tuple[str, str]] = []
+                for seg_id, inp in items:
+                    cache_val: str | None = None
+                    if self._cache and self._cache_enabled:
+                        key = self._make_cache_key(
+                            inp, g_src, "en", _engine_key(g_src), opts.get("glossary_id")
                         )
+                        try:
+                            cache_val = self._cache.get(key)
+                        except Exception:
+                            cache_val = None
+                    if cache_val is not None:
+                        translated_map[seg_id] = cache_val
+                        cached += 1
+                    else:
+                        to_translate.append((seg_id, inp))
+                if to_translate:
+                    # Load engine for group src
+                    self.load(g_src)
+                    # Split and batch
+                    engine = self._engines[g_src]
+                    tokenizer = engine["tokenizer"]
+                    batch_texts: list[str] = []
+                    batch_owner: list[str] = []
+                    for seg_id, text in to_translate:
+                        parts = self._split_by_tokens(
+                            tokenizer, text, max_tokens_input=self._estimate_input_budget(tokenizer)
+                        )
+                        for p in parts:
+                            batch_texts.append(p)
+                            batch_owner.append(seg_id)
+                    # Run batches
+                    out_texts: list[str] = []
+                    out_owner: list[str] = []
+                    for i in range(0, len(batch_texts), self._eng.max_batch_size):
+                        sl = slice(i, min(i + self._eng.max_batch_size, len(batch_texts)))
+                        chunk_inputs = batch_texts[sl]
+                        chunk_owner = batch_owner[sl]
+                        chunk_outputs = self._translate_batch_texts(chunk_inputs, src_lang=g_src)
+                        out_texts.extend(chunk_outputs)
+                        out_owner.extend(chunk_owner)
+                        batched_calls += 1
+                    # Reassemble and cache
+                    per_seg: dict[str, list[str]] = {}
+                    for sid, txt in zip(out_owner, out_texts):
+                        per_seg.setdefault(sid, []).append(txt)
+                    for sid, parts in per_seg.items():
+                        full = "".join(parts)
+                        # Post-glossary
+                        if self._glossary and self._glossary_mode in {"post", "both"}:
+                            try:
+                                full = self._glossary.apply(
+                                    full,
+                                    src_lang=g_src,
+                                    tgt_lang="en",
+                                    mode="post",
+                                    glossary_id=opts.get("glossary_id"),
+                                )
+                            except Exception as exc:
+                                raise TranslationError(
+                                    "glossary failed",
+                                    {"reason": "GLOSSARY_FAILED", "message": str(exc)},
+                                )
+                        translated_map[sid] = full
+                        if self._cache and self._cache_enabled:
+                            try:
+                                # Use original pre-glossary text to build cache key
+                                # Find original text from segments list
+                                orig = self._find_original_text(segments, sid)
+                                orig_pre = _glossary_pre(orig)
+                                key = self._make_cache_key(
+                                    orig_pre,
+                                    g_src,
+                                    "en",
+                                    _engine_key(g_src),
+                                    opts.get("glossary_id"),
+                                )
+                                self._cache.put(key, full)
+                            except Exception:
+                                pass
+        else:
+            # Original single-language path
+            engine_key = self._compute_model_fingerprint(self._models[src])
+            to_translate: list[tuple[str, str]] = []  # (seg_id, preprocessed_text)
+
+            for seg in segments:
+                inp = _glossary_pre(seg.text)
+                cache_val: str | None = None
+                if self._cache and self._cache_enabled:
+                    key = self._make_cache_key(inp, src, "en", engine_key, opts.get("glossary_id"))
+                    try:
+                        cache_val = self._cache.get(key)
+                    except Exception:
+                        cache_val = None
+                if cache_val is not None:
+                    translated_map[seg.id] = cache_val
+                    cached += 1
+                else:
+                    to_translate.append((seg.id, inp))
+
+            # Load model/tokenizer only if we have misses
+            if to_translate:
+                self.load(src)
+
+            # 3) Translate misses deterministically in batches
+            t_tr0 = time.perf_counter()
+            if to_translate:
+                # Potential safe sub-splitting by tokenizer token budget (input side)
+                engine = self._engines[src]
+                tokenizer = engine["tokenizer"]
+                # We avoid truncation; split conservatively by sentences/words.
+                batch_texts: list[str] = []
+                batch_owner: list[str] = []  # original seg id
+
+                for seg_id, text in to_translate:
+                    parts = self._split_by_tokens(
+                        tokenizer, text, max_tokens_input=self._estimate_input_budget(tokenizer)
+                    )
+                    for p in parts:
+                        batch_texts.append(p)
+                        batch_owner.append(seg_id)
+
+                # Execute in fixed-size batches
+                out_texts: list[str] = []
+                out_owner: list[str] = []
+                for i in range(0, len(batch_texts), self._eng.max_batch_size):
+                    sl = slice(i, min(i + self._eng.max_batch_size, len(batch_texts)))
+                    chunk_inputs = batch_texts[sl]
+                    chunk_owner = batch_owner[sl]
+                    try:
+                        chunk_outputs = self._translate_batch_texts(chunk_inputs, src_lang=src)
+                    except TranslationError:
+                        raise
                     except Exception as exc:
                         raise TranslationError(
-                            "glossary failed", {"reason": "GLOSSARY_FAILED", "message": str(exc)}
+                            "batch failed",
+                            {
+                                "reason": "BATCH_GENERATION_FAILED",
+                                "message": str(exc.__class__.__name__),
+                                "count": len(chunk_inputs),
+                            },
                         )
-                translated_map[sid] = full
-                # Cache store
-                if self._cache and self._cache_enabled:
-                    try:
-                        orig = _glossary_pre(self._find_original_text(segments, sid))
-                        key = self._make_cache_key(orig, src, "en", engine_key, glossary_id)
-                        self._cache.put(key, full)
-                    except Exception:
-                        pass
-        t_tr1 = time.perf_counter()
+                    out_texts.extend(chunk_outputs)
+                    out_owner.extend(chunk_owner)
+                    batched_calls += 1
 
-        # 4) Recombine into Markdown
+                # Reassemble subparts into full segment translations, apply post-glossary, and cache
+                per_seg: dict[str, list[str]] = {}
+                for sid, txt in zip(out_owner, out_texts):
+                    per_seg.setdefault(sid, []).append(txt)
+
+                for sid, parts in per_seg.items():
+                    full = "".join(parts)
+                    # Post-glossary
+                    if self._glossary and self._glossary_mode in {"post", "both"}:
+                        try:
+                            full = self._glossary.apply(
+                                full,
+                                src_lang=src,
+                                tgt_lang="en",
+                                mode="post",
+                                glossary_id=opts.get("glossary_id"),
+                            )
+                        except Exception as exc:
+                            raise TranslationError(
+                                "glossary failed",
+                                {"reason": "GLOSSARY_FAILED", "message": str(exc)},
+                            )
+                    translated_map[sid] = full
+                    # Cache store
+                    if self._cache and self._cache_enabled:
+                        try:
+                            orig = _glossary_pre(self._find_original_text(segments, sid))
+                            key = self._make_cache_key(
+                                orig, src, "en", engine_key, opts.get("glossary_id")
+                            )
+                            self._cache.put(key, full)
+                        except Exception:
+                            pass
+            t_tr1 = time.perf_counter()
+
+        # 4) Recombine into Markdown (common for both paths)
         translated_items = [
             {"id": sid, "text": translated_map[sid]} for sid in (e.id for e in segments)
         ]
@@ -626,7 +757,7 @@ class MarianOpus(TranslatePort):
             )
         t_rc1 = time.perf_counter()
 
-        # 5) Assemble output with telemetry
+        # 5) Assemble output metadata (include engine fingerprint for primary src)
         engine = self._engines.get(src)
         fingerprint = (
             engine.get("fingerprint")
@@ -637,13 +768,14 @@ class MarianOpus(TranslatePort):
         meta.setdefault("translator", {})
         meta["translator"] = {
             "engine": "marian-opus",
-            "model_id": self._models[src],
+            "model_id": self._models.get(src, next(iter(self._models.values()))),
             "device": self._eng.device,
             "dtype": self._eng.dtype,
             "num_beams": self._eng.num_beams,
             "length_penalty": self._eng.length_penalty,
             "no_repeat_ngram_size": self._eng.no_repeat_ngram_size,
             "fingerprint": fingerprint,
+            "mixed_lang_per_segment": bool(mixed_per_segment),
         }
         meta.setdefault("langs", {})
         meta["langs"] = {"src": src, "tgt": "en"}
@@ -655,8 +787,9 @@ class MarianOpus(TranslatePort):
             "max_batch_size": self._eng.max_batch_size,
         }
         meta["timings_ms"] = {
+            # Note: when mixed_per_segment, translate time not tracked separately here
             "segment": (t_seg1 - t_seg0) * 1000.0,
-            "translate": (t_tr1 - t_tr0) * 1000.0,
+            "translate": 0.0,
             "recombine": (t_rc1 - t_rc0) * 1000.0,
         }
         if glossary_id is not None:
